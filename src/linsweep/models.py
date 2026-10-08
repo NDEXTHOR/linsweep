@@ -7,7 +7,7 @@ class RiskLevel(Enum):
     SAFE = "safe"
     REVIEW = "review"
     DANGEROUS = "dangerous"
-
+    UNKNOWN = "unknown"
 
 class PackageStatus(Enum):
     INSTALLED = "installed"
@@ -15,7 +15,6 @@ class PackageStatus(Enum):
     OLD = "old"
     NEWER = "newer"
     NOT_INSTALLED = "not_installed"
-
 
 @dataclass
 class CleanupCandidate:
@@ -32,7 +31,6 @@ class CleanupCandidate:
     @property
     def size_gb(self) -> float:
         return self.size_bytes / (1024 ** 3)
-
 
 @dataclass
 class CachedPackage:

@@ -1,7 +1,8 @@
 import argparse
 import shutil
 
-from linsweep.models import PackageStatus
+from linsweep.models import PackageStatus, RiskLevel
+
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
@@ -415,29 +416,128 @@ def show_user_cache(details: bool = False) -> None:
         print()
         return
 
-    total_size = sum(
-        entry.size_bytes
-        for entry in entries
-    )
-
     entries.sort(
         key=lambda entry: entry.size_bytes,
         reverse=True,
     )
 
-    print(f"Directorios encontrados:    {len(entries)}")
-    print(f"Espacio utilizado:          {format_size(total_size)}")
+    total_size = sum(
+        entry.size_bytes
+        for entry in entries
+    )
+
+    safe_entries = [
+        entry
+        for entry in entries
+        if entry.risk == RiskLevel.SAFE
+    ]
+
+    review_entries = [
+        entry
+        for entry in entries
+        if entry.risk == RiskLevel.REVIEW
+    ]
+
+    unknown_entries = [
+        entry
+        for entry in entries
+        if entry.risk == RiskLevel.UNKNOWN
+    ]
+
+    dangerous_entries = [
+        entry
+        for entry in entries
+        if entry.risk == RiskLevel.DANGEROUS
+    ]
+
+    safe_size = sum(
+        entry.size_bytes
+        for entry in safe_entries
+    )
+
+    review_size = sum(
+        entry.size_bytes
+        for entry in review_entries
+    )
+
+    unknown_size = sum(
+        entry.size_bytes
+        for entry in unknown_entries
+    )
+
+    dangerous_size = sum(
+        entry.size_bytes
+        for entry in dangerous_entries
+    )
+
+    print(
+        f"Directorios encontrados:    {len(entries)}"
+    )
+
+    print(
+        f"Espacio utilizado:          {format_size(total_size)}"
+    )
+
+    print()
+
+    print(
+        f"Seguro / reconstruible:     "
+        f"{len(safe_entries):3} directorios   "
+        f"{format_size(safe_size)}"
+    )
+
+    print(
+        f"Requiere revisión:          "
+        f"{len(review_entries):3} directorios   "
+        f"{format_size(review_size)}"
+    )
+
+    print(
+        f"Desconocido:                "
+        f"{len(unknown_entries):3} directorios   "
+        f"{format_size(unknown_size)}"
+    )
+
+    if dangerous_entries:
+        print(
+            f"Peligroso:                  "
+            f"{len(dangerous_entries):3} directorios   "
+            f"{format_size(dangerous_size)}"
+        )
+
+    print()
+
+    print("Potencialmente recuperable:")
+    print(
+        f"  Bajo riesgo: {format_size(safe_size)}"
+    )
+
     print()
 
     print("Directorios más grandes:")
 
+    labels = {
+        RiskLevel.SAFE: "SAFE",
+        RiskLevel.REVIEW: "REVIEW",
+        RiskLevel.UNKNOWN: "UNKNOWN",
+        RiskLevel.DANGEROUS: "DANGER",
+    }
+
     limit = len(entries) if details else 10
 
     for entry in entries[:limit]:
+        label = labels[entry.risk]
+
         print(
             f"{format_size(entry.size_bytes):>10}  "
+            f"{label:<7}  "
             f"{entry.name}"
         )
+
+        if details:
+            print(
+                f"{'':12}{entry.description}"
+            )
 
     print()
 
