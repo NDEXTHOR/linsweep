@@ -191,3 +191,71 @@ def test_scan_pacman_cache_ignores_signatures(
 
     assert len(packages) == 1
     assert packages[0].name == "example"
+
+def test_parse_installed_size_megabytes() -> None:
+    assert pacman.parse_installed_size(
+        "100 MiB"
+    ) == 100 * 1024 ** 2
+
+
+def test_parse_installed_size_gigabytes() -> None:
+    assert pacman.parse_installed_size(
+        "1.5 GiB"
+    ) == int(
+        1.5 * 1024 ** 3
+    )
+
+
+def test_get_orphan_packages(
+    monkeypatch,
+) -> None:
+    responses = [
+        "example\n",
+        (
+            "Name            : example\n"
+            "Version         : 2.1-1\n"
+            "Installed Size  : 150 MiB\n"
+        ),
+    ]
+
+    class FakeResult:
+        def __init__(self, stdout: str):
+            self.stdout = stdout
+
+    def fake_run(*args, **kwargs):
+        return FakeResult(
+            responses.pop(0)
+        )
+
+    monkeypatch.setattr(
+        pacman.subprocess,
+        "run",
+        fake_run,
+    )
+
+    orphans = pacman.get_orphan_packages()
+
+    assert len(orphans) == 1
+
+    package = orphans[0]
+
+    assert package.name == "example"
+    assert package.version == "2.1-1"
+    assert package.size_bytes == 150 * 1024 ** 2
+
+
+def test_get_orphan_packages_returns_empty(
+    monkeypatch,
+) -> None:
+    class FakeResult:
+        stdout = ""
+
+    monkeypatch.setattr(
+        pacman.subprocess,
+        "run",
+        lambda *args, **kwargs: FakeResult(),
+    )
+
+    orphans = pacman.get_orphan_packages()
+
+    assert orphans == []
