@@ -19,6 +19,10 @@ from linsweep.modules.trash import (
     scan_trash,
 )
 from linsweep.modules.temp_files import scan_temp_files
+from linsweep.modules.cleanup import (
+    execute_pacman_cleanup,
+    get_pacman_cleanup_candidates,
+)
 
 def format_size(size: int) -> str:
     units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
@@ -965,6 +969,131 @@ def show_package_details(packages) -> None:
 
     print()
 
+def clean_pacman_cache(dry_run: bool = False,) -> None:
+    print("=== LIMPIEZA DE CACHÉ PACMAN ===")
+    print()
+
+    candidates = (
+        get_pacman_cleanup_candidates()
+    )
+
+    if not candidates:
+        print(
+            "No se encontraron archivos "
+            "de caché para limpiar."
+        )
+        print()
+        return
+
+    old_packages = [
+        package
+        for package in candidates
+        if package.status == PackageStatus.OLD
+    ]
+
+    uninstalled_packages = [
+        package
+        for package in candidates
+        if package.status
+        == PackageStatus.NOT_INSTALLED
+    ]
+
+    total_size = sum(
+        package.size_bytes
+        for package in candidates
+    )
+
+    print(
+        f"Versiones antiguas:         "
+        f"{len(old_packages)}"
+    )
+
+    print(
+        f"Paquetes no instalados:     "
+        f"{len(uninstalled_packages)}"
+    )
+
+    print(
+        f"Total de archivos:          "
+        f"{len(candidates)}"
+    )
+
+    print(
+        f"Espacio recuperable:        "
+        f"{format_size(total_size)}"
+    )
+
+    print()
+    print("Archivos que se eliminarían:")
+    print()
+
+    for package in candidates:
+        if package.status == PackageStatus.OLD:
+            status = "OLD"
+        else:
+            status = "NOT_INSTALLED"
+
+        print(
+            f"{format_size(package.size_bytes):>10}  "
+            f"{status:<13}  "
+            f"{package.path}"
+        )
+
+    print()
+
+    if dry_run:
+        print(
+            "DRY-RUN: no se realizó "
+            "ningún cambio."
+        )
+        print()
+        return
+
+    print(
+        "LinSweep eliminará únicamente "
+        "los archivos mostrados por la política "
+        "de limpieza de Pacman."
+    )
+
+    print(
+        "Se conservará la versión instalada "
+        "y una versión de respaldo."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "ELIMINAR" para continuar: '
+        )
+    except (
+        KeyboardInterrupt,
+        EOFError,
+    ):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "ELIMINAR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, message = (
+        execute_pacman_cleanup()
+    )
+
+    print(message)
+
+    if success:
+        print(
+            f"Espacio recuperable estimado: "
+            f"{format_size(total_size)}"
+        )
+
+    print()
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -1070,6 +1199,34 @@ def build_parser() -> argparse.ArgumentParser:
     	help="Muestra todos los directorios de caché.",
     )
 
+    clean_parser = subparsers.add_parser(
+        "clean",
+        help="Ejecuta operaciones de limpieza seguras.",
+    )
+
+    clean_subparsers = (
+        clean_parser.add_subparsers(
+            dest="clean_target",
+            required=True,
+        )
+    )
+
+    clean_packages_parser = (
+        clean_subparsers.add_parser(
+            "packages",
+            help="Limpia la caché antigua de Pacman.",
+        )
+    )
+
+    clean_packages_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra exactamente qué se eliminaría "
+            "sin modificar el sistema."
+        ),
+    )
+
     return parser
 
 
@@ -1122,6 +1279,13 @@ def main() -> None:
             details=args.details
         )
         return    
+
+    if args.command == "clean":
+        if args.clean_target == "packages":
+            clean_pacman_cache(
+                dry_run=args.dry_run
+            )
+            return
 
     show_disk_usage()
     show_pacman_cache()
