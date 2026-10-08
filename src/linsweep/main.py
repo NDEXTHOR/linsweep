@@ -1,6 +1,5 @@
 import argparse
 import shutil
-
 from linsweep.models import PackageStatus, RiskLevel
 from linsweep.modules.pacman import (
     classify_packages,
@@ -19,6 +18,7 @@ from linsweep.modules.trash import (
     get_trash_directory,
     scan_trash,
 )
+from linsweep.modules.temp_files import scan_temp_files
 
 def format_size(size: int) -> str:
     units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
@@ -740,34 +740,178 @@ def show_trash(details: bool = False,) -> None:
             f"{oldest:%Y-%m-%d %H:%M:%S}"
         )
 
-    print()
-    print("Potencialmente recuperable:")
+        print()
+    print("Potencialmente revisable:")
+
     print(
-        f"  Espacio: {format_size(total_size)}"
+        f"  Archivos > 7 días:        "
+        f"{len(old)}"
     )
-    print("  Clasificación: REVIEW")
+
+    print(
+        f"  Espacio:                  "
+        f"{format_size(total_size(old))}"
+    )
+
+    print(
+        "  Clasificación:            REVIEW"
+    )
+
     print()
 
     if details:
-        for entry in entries:
+        print("Archivos a revisar (> 7 días):")
+        print()
+
+        if not old:
+            print("No se encontraron archivos antiguos.")
+            print()
+            return
+
+        old_sorted = sorted(
+            old,
+            key=lambda item: (
+                item.age_days,
+                item.size_bytes,
+            ),
+            reverse=True,
+        )
+
+        for file in old_sorted:
             print(
-                f"{format_size(entry.size_bytes):>10}  "
-                f"{entry.name}"
+                f"{format_size(file.size_bytes):>10}  "
+                f"{file.age_days:6.1f} días  "
+                f"{file.path}"
             )
 
-            if entry.original_path:
-                print(
-                    f"            Origen: "
-                    f"{entry.original_path}"
-                )
+        print()
 
-            if entry.deletion_date:
-                print(
-                    f"            Eliminado: "
-                    f"{entry.deletion_date:%Y-%m-%d %H:%M:%S}"
-                )
+def show_temp_files(details: bool = False,) -> None:
+    print("=== ARCHIVOS TEMPORALES ===")
 
+    files = scan_temp_files()
+
+    tmp_files = [
+        file
+        for file in files
+        if file.path.is_relative_to("/tmp")
+    ]
+
+    var_tmp_files = [
+        file
+        for file in files
+        if file.path.is_relative_to("/var/tmp")
+    ]
+
+    recent = [
+        file
+        for file in files
+        if file.age_days < 1
+    ]
+
+    medium = [
+        file
+        for file in files
+        if 1 <= file.age_days <= 7
+    ]
+
+    old = [
+        file
+        for file in files
+        if file.age_days > 7
+    ]
+
+    def total_size(items) -> int:
+        return sum(
+            item.size_bytes
+            for item in items
+        )
+
+    print("/tmp")
+    print(
+        f"  Archivos propios:         "
+        f"{len(tmp_files)}"
+    )
+    print(
+        f"  Espacio utilizado:        "
+        f"{format_size(total_size(tmp_files))}"
+    )
+
+    print()
+
+    print("/var/tmp")
+    print(
+        f"  Archivos propios:         "
+        f"{len(var_tmp_files)}"
+    )
+    print(
+        f"  Espacio utilizado:        "
+        f"{format_size(total_size(var_tmp_files))}"
+    )
+
+    print()
+    print("Antigüedad:")
+
+    print(
+        f"  < 1 día:                  "
+        f"{format_size(total_size(recent))}"
+    )
+
+    print(
+        f"  1 - 7 días:               "
+        f"{format_size(total_size(medium))}"
+    )
+
+    print(
+        f"  > 7 días:                 "
+        f"{format_size(total_size(old))}"
+    )
+
+    print()
+    print("Potencialmente revisable:")
+
+    print(
+        f"  Archivos > 7 días:        "
+        f"{len(old)}"
+    )
+
+    print(
+        f"  Espacio:                  "
+        f"{format_size(total_size(old))}"
+    )
+
+    print(
+        "  Clasificación:            REVIEW"
+    )
+
+    print()
+
+    if details:
+        print("Archivos a revisar (> 7 días):")
+        print()
+
+        if not old:
+            print("No se encontraron archivos antiguos.")
             print()
+            return
+
+        old_sorted = sorted(
+            old,
+            key=lambda item: (
+                item.age_days,
+                item.size_bytes,
+            ),
+            reverse=True,
+        )
+
+        for file in old_sorted:
+            print(
+                f"{format_size(file.size_bytes):>10}  "
+                f"{file.age_days:6.1f} días  "
+                f"{file.path}"
+            )
+
+        print()
 
 def show_package_details(packages) -> None:
 
@@ -893,6 +1037,17 @@ def build_parser() -> argparse.ArgumentParser:
     	help="Muestra los elementos de la papelera.",
     )
 
+    temp_parser = subparsers.add_parser(
+        "temp",
+        help="Analiza archivos temporales del usuario.",
+    )
+
+    temp_parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Muestra los archivos temporales encontrados.",
+    )
+
     yay_parser = subparsers.add_parser(
         "yay",
     	help="Analiza la caché de Yay/AUR.",
@@ -961,6 +1116,12 @@ def main() -> None:
         details=args.details
         )
         return
+    
+    if args.command == "temp":
+        show_temp_files(
+            details=args.details
+        )
+        return    
 
     show_disk_usage()
     show_pacman_cache()
