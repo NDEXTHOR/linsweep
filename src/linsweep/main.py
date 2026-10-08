@@ -28,6 +28,47 @@ def format_size(size: int) -> str:
 
     return f"{value:.2f} EiB"
 
+def parse_size(value: str) -> int:
+    value = value.strip().upper()
+
+    units = {
+        "B": 1,
+        "K": 1024,
+        "KB": 1024,
+        "KIB": 1024,
+        "M": 1024 ** 2,
+        "MB": 1024 ** 2,
+        "MIB": 1024 ** 2,
+        "G": 1024 ** 3,
+        "GB": 1024 ** 3,
+        "GIB": 1024 ** 3,
+        "T": 1024 ** 4,
+        "TB": 1024 ** 4,
+        "TIB": 1024 ** 4,
+    }
+
+    for unit in sorted(
+        units,
+        key=len,
+        reverse=True,
+    ):
+        if value.endswith(unit):
+            number = value[:-len(unit)]
+
+            try:
+                return int(
+                    float(number) * units[unit]
+                )
+            except ValueError:
+                break
+
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Tamaño inválido: {value}. "
+            "Ejemplos: 500M, 1G, 2.5G"
+        )
 
 def show_disk_usage() -> None:
     total, used, free = shutil.disk_usage("/")
@@ -549,17 +590,16 @@ def show_user_cache(details: bool = False) -> None:
         )
         print()
 
-def show_large_files() -> None:
+def show_large_files(root: Path,min_size: int,) -> None:
     print("=== ARCHIVOS GRANDES ===")
 
-    min_size = 500 * 1024 * 1024
-
     files = scan_large_files(
-        min_size=min_size
+	root=root,
+        min_size=min_size,
     )
 
     print(
-        f"Ruta analizada: {Path.home()}"
+        f"Ruta analizada: {root}"
     )
 
     print(
@@ -686,9 +726,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Analiza el espacio utilizado por systemd journal.",
     )
 
-    subparsers.add_parser(
+    large_files_parser = subparsers.add_parser(
         "large-files",
-        help="Busca archivos grandes en el directorio del usuario.",
+    	help="Busca archivos grandes en el directorio del usuario.",
+    )
+
+    large_files_parser.add_argument(
+        "--min-size",
+    	type=parse_size,
+    	default=500 * 1024 * 1024,
+    	metavar="TAMAÑO",
+    	help=(
+            "Tamaño mínimo del archivo. "
+            "Ejemplos: 100M, 500M, 1G. "
+            "Predeterminado: 500M."
+        ),
+    )
+
+    large_files_parser.add_argument(
+        "--path",
+    	type=Path,
+    	default=Path.home(),
+    	metavar="RUTA",
+    	help=(
+            "Directorio que se analizará. "
+        	"Predeterminado: directorio personal."
+    	),
     )
 
     yay_parser = subparsers.add_parser(
@@ -740,6 +803,7 @@ def main() -> None:
             details=args.details
         )
         return
+
     if args.command == "cache":
         show_user_cache(
             details=args.details
@@ -747,7 +811,10 @@ def main() -> None:
         return
 
     if args.command == "large-files":
-        show_large_files()
+        show_large_files(
+            root=args.path.expanduser().resolve(),
+            min_size=args.min_size,
+        )
         return
 
     show_disk_usage()
