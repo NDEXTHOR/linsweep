@@ -9,7 +9,7 @@ LinSweep se encuentra actualmente en desarrollo y está enfocado principalmente 
 Clona el repositorio:
 
 ```bash
-git clone <URL-DEL-REPOSITORIO>
+git clone https://github.com/NDEXTHOR/linsweep
 cd linsweep
 ```
 

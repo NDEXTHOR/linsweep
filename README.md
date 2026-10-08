@@ -127,7 +127,7 @@ Actualmente LinSweep todavía está en desarrollo y no cuenta con un paquete est
 Clona el repositorio:
 
 ```bash
-git clone <URL-DEL-REPOSITORIO>
+git clone https://github.com/NDEXTHOR/linsweep
 cd linsweep
 ```
 
