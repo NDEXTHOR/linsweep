@@ -5,6 +5,7 @@ from linsweep.models import PackageStatus, RiskLevel
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
+    get_orphan_packages,
 )
 from linsweep.modules.journal import (
     calculate_recoverable,
@@ -268,6 +269,10 @@ def show_pacman_cache(details: bool = False) -> None:
 
     if details:
         show_package_details(packages)
+
+    show_orphan_packages(
+        details=details
+    )
 
 def show_yay_cache(details: bool = False) -> None:
     print("=== YAY / AUR CACHE ===")
@@ -640,6 +645,50 @@ def show_large_files(root: Path,min_size: int,) -> None:
         )
 
     print()
+
+def show_orphan_packages(details: bool = False,) -> None:
+    print("=== PAQUETES HUÉRFANOS ===")
+
+    orphans = get_orphan_packages()
+
+    if not orphans:
+        print("No se encontraron paquetes huérfanos.")
+        print()
+        return
+
+    total_size = sum(
+        package.size_bytes
+        for package in orphans
+    )
+
+    print(
+        f"Paquetes encontrados:       {len(orphans)}"
+    )
+    print(
+        f"Tamaño instalado:           "
+        f"{format_size(total_size)}"
+    )
+    print("Clasificación:              REVIEW")
+    print()
+
+    print(
+        "Estos paquetes fueron instalados como "
+        "dependencias y actualmente no son requeridos."
+    )
+    print(
+        "No se consideran automáticamente seguros "
+        "para eliminar."
+    )
+    print()
+
+    if details:
+        for package in orphans:
+            print(
+                f"{format_size(package.size_bytes):>10}  "
+                f"{package.name} {package.version}"
+            )
+
+        print()
 
 def show_package_details(packages) -> None:
 

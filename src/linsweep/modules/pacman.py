@@ -2,12 +2,16 @@ from collections import defaultdict
 from functools import cmp_to_key
 from pathlib import Path
 import subprocess
+import os
+import re
 
-from linsweep.models import CachedPackage, PackageStatus
-
+from linsweep.models import (
+    CachedPackage,
+    OrphanPackage,
+    PackageStatus,
+)
 
 PACMAN_CACHE = Path("/var/cache/pacman/pkg")
-
 
 def get_installed_packages() -> dict[str, str]:
     """
@@ -41,7 +45,6 @@ def get_installed_packages() -> dict[str, str]:
         installed[name] = version
 
     return installed
-
 
 def parse_package_filename(path: Path) -> CachedPackage | None:
     """
@@ -84,7 +87,6 @@ def parse_package_filename(path: Path) -> CachedPackage | None:
         size_bytes=size,
     )
 
-
 def scan_pacman_cache() -> list[CachedPackage]:
     packages: list[CachedPackage] = []
 
@@ -109,7 +111,6 @@ def scan_pacman_cache() -> list[CachedPackage]:
             packages.append(package)
 
     return packages
-
 
 def compare_versions(version_a: str, version_b: str) -> int:
     """
@@ -194,3 +195,104 @@ def classify_packages(
 
     return packages
 
+def parse_installed_size(size_text: str) -> int:
+    match = re.fullmatch(
+        r"([\d.]+)\s*(B|KiB|MiB|GiB|TiB)",
+        size_text.strip(),
+        re.IGNORECASE,
+    )
+
+    if not match:
+        return 0
+
+    value = float(match.group(1))
+    unit = match.group(2).lower()
+
+    multipliers = {
+        "b": 1,
+        "kib": 1024,
+        "mib": 1024 ** 2,
+        "gib": 1024 ** 3,
+        "tib": 1024 ** 4,
+    }
+
+    return int(
+        value * multipliers[unit]
+    )
+
+
+def get_orphan_packages() -> list[OrphanPackage]:
+    env = os.environ.copy()
+    env["LC_ALL"] = "C"
+
+    try:
+        result = subprocess.run(
+            ["pacman", "-Qdtq"],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except FileNotFoundError:
+        return []
+
+    names = [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip()
+    ]
+
+    if not names:
+        return []
+
+    try:
+        info_result = subprocess.run(
+            ["pacman", "-Qi", *names],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except FileNotFoundError:
+        return []
+
+    orphans: list[OrphanPackage] = []
+
+    for block in info_result.stdout.split("\n\n"):
+        name = None
+        version = None
+        size_bytes = 0
+
+        for line in block.splitlines():
+            if ":" not in line:
+                continue
+
+            key, value = line.split(":", 1)
+
+            key = key.strip()
+            value = value.strip()
+
+            if key == "Name":
+                name = value
+
+            elif key == "Version":
+                version = value
+
+            elif key == "Installed Size":
+                size_bytes = parse_installed_size(
+                    value
+                )
+
+        if name and version:
+            orphans.append(
+                OrphanPackage(
+                    name=name,
+                    version=version,
+                    size_bytes=size_bytes,
+                )
+            )
+
+    orphans.sort(
+        key=lambda package: package.size_bytes,
+        reverse=True,
+    )
+
+    return orphans

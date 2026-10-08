@@ -65,3 +65,13 @@ class YayCacheEntry:
     compiled_old_count: int = 0
     compiled_newer_count: int = 0
     compiled_not_installed_count: int = 0
+
+@dataclass
+class OrphanPackage:
+    name: str
+    version: str
+    size_bytes: int
+
+    @property
+    def size_mb(self) -> float:
+        return self.size_bytes / (1024 ** 2)
