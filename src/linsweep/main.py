@@ -2,20 +2,18 @@ import argparse
 import shutil
 
 from linsweep.models import PackageStatus, RiskLevel
-
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
 )
-
 from linsweep.modules.journal import (
     calculate_recoverable,
     get_journal_disk_usage,
 )
-
 from linsweep.modules.yay import scan_yay_cache
-
 from linsweep.modules.user_cache import scan_user_cache
+from linsweep.modules.large_files import scan_large_files
+from pathlib import Path
 
 def format_size(size: int) -> str:
     units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
@@ -551,6 +549,58 @@ def show_user_cache(details: bool = False) -> None:
         )
         print()
 
+def show_large_files() -> None:
+    print("=== ARCHIVOS GRANDES ===")
+
+    min_size = 500 * 1024 * 1024
+
+    files = scan_large_files(
+        min_size=min_size
+    )
+
+    print(
+        f"Ruta analizada: {Path.home()}"
+    )
+
+    print(
+        f"Tamaño mínimo: {format_size(min_size)}"
+    )
+
+    print()
+
+    if not files:
+        print(
+            "No se encontraron archivos "
+            "que superen el tamaño mínimo."
+        )
+        print()
+        return
+
+    print(
+        f"Archivos encontrados: {len(files)}"
+    )
+
+    print()
+
+    for file in files:
+        try:
+            display_path = (
+                "~/" + str(
+                    file.path.relative_to(
+                        Path.home()
+                    )
+                )
+            )
+        except ValueError:
+            display_path = str(file.path)
+
+        print(
+            f"{format_size(file.size_bytes):>10}  "
+            f"{display_path}"
+        )
+
+    print()
+
 def show_package_details(packages) -> None:
 
     old_packages = [
@@ -636,6 +686,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Analiza el espacio utilizado por systemd journal.",
     )
 
+    subparsers.add_parser(
+        "large-files",
+        help="Busca archivos grandes en el directorio del usuario.",
+    )
+
     yay_parser = subparsers.add_parser(
         "yay",
     	help="Analiza la caché de Yay/AUR.",
@@ -689,6 +744,10 @@ def main() -> None:
         show_user_cache(
             details=args.details
         )
+        return
+
+    if args.command == "large-files":
+        show_large_files()
         return
 
     show_disk_usage()
