@@ -1,0 +1,15 @@
+[project]
+name = "linsweep"
+version = "0.1.0"
+description = "Herramienta modular de análisis y mantenimiento para Linux"
+requires-python = ">=3.11"
+
+[project.scripts]
+linsweep = "linsweep.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
