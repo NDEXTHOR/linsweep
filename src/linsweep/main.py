@@ -15,6 +15,10 @@ from linsweep.modules.yay import scan_yay_cache
 from linsweep.modules.user_cache import scan_user_cache
 from linsweep.modules.large_files import scan_large_files
 from pathlib import Path
+from linsweep.modules.trash import (
+    get_trash_directory,
+    scan_trash,
+)
 
 def format_size(size: int) -> str:
     units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
@@ -690,6 +694,81 @@ def show_orphan_packages(details: bool = False,) -> None:
 
         print()
 
+def show_trash(details: bool = False,) -> None:
+    print("=== PAPELERA ===")
+
+    entries = scan_trash()
+
+    total_size = sum(
+        entry.size_bytes
+        for entry in entries
+    )
+
+    print(
+        f"Ruta:                       "
+        f"{get_trash_directory()}"
+    )
+
+    print(
+        f"Elementos encontrados:       "
+        f"{len(entries)}"
+    )
+
+    print(
+        f"Espacio utilizado:           "
+        f"{format_size(total_size)}"
+    )
+
+    print()
+
+    if not entries:
+        print("La papelera está vacía.")
+        print()
+        return
+
+    dates = [
+        entry.deletion_date
+        for entry in entries
+        if entry.deletion_date is not None
+    ]
+
+    if dates:
+        oldest = min(dates)
+
+        print(
+            f"Elemento más antiguo:        "
+            f"{oldest:%Y-%m-%d %H:%M:%S}"
+        )
+
+    print()
+    print("Potencialmente recuperable:")
+    print(
+        f"  Espacio: {format_size(total_size)}"
+    )
+    print("  Clasificación: REVIEW")
+    print()
+
+    if details:
+        for entry in entries:
+            print(
+                f"{format_size(entry.size_bytes):>10}  "
+                f"{entry.name}"
+            )
+
+            if entry.original_path:
+                print(
+                    f"            Origen: "
+                    f"{entry.original_path}"
+                )
+
+            if entry.deletion_date:
+                print(
+                    f"            Eliminado: "
+                    f"{entry.deletion_date:%Y-%m-%d %H:%M:%S}"
+                )
+
+            print()
+
 def show_package_details(packages) -> None:
 
     old_packages = [
@@ -803,6 +882,17 @@ def build_parser() -> argparse.ArgumentParser:
     	),
     )
 
+    trash_parser = subparsers.add_parser(
+        "trash",
+    	help="Analiza la papelera del usuario.",
+    )
+
+    trash_parser.add_argument(
+        "--details",
+    	action="store_true",
+    	help="Muestra los elementos de la papelera.",
+    )
+
     yay_parser = subparsers.add_parser(
         "yay",
     	help="Analiza la caché de Yay/AUR.",
@@ -863,6 +953,12 @@ def main() -> None:
         show_large_files(
             root=args.path.expanduser().resolve(),
             min_size=args.min_size,
+        )
+        return
+    
+    if args.command == "trash":
+        show_trash(
+        details=args.details
         )
         return
 
