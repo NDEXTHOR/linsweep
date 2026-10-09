@@ -782,3 +782,97 @@ def test_execute_user_cache_cleanup_rejects_cache_in_use(tmp_path: Path, monkeyp
     assert deleted_size == 0
     assert cache_path.exists()
     assert "en uso" in message.lower()
+
+def test_execute_journal_cleanup_requires_journalctl(monkeypatch) -> None:
+    def fake_which(command: str):
+        if command == "journalctl":
+            return None
+
+        return f"/usr/bin/{command}"
+
+    monkeypatch.setattr(
+        cleanup.shutil,
+        "which",
+        fake_which,
+    )
+
+    success, message = cleanup.execute_journal_cleanup(
+        50 * 1024 ** 2
+    )
+
+    assert success is False
+    assert "journalctl" in message.lower()
+
+
+def test_execute_journal_cleanup_rejects_invalid_size() -> None:
+    success, message = cleanup.execute_journal_cleanup(
+        0
+    )
+
+    assert success is False
+    assert "mayor que cero" in message.lower()
+
+
+def test_execute_journal_cleanup_runs_expected_command(monkeypatch) -> None:
+    commands = []
+
+    class FakeResult:
+        returncode = 0
+
+    def fake_run(command, check=False):
+        commands.append(command)
+        return FakeResult()
+
+    monkeypatch.setattr(
+        cleanup.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}",
+    )
+
+    monkeypatch.setattr(
+        cleanup.subprocess,
+        "run",
+        fake_run,
+    )
+
+    target_size = 50 * 1024 ** 2
+
+    success, message = cleanup.execute_journal_cleanup(
+        target_size
+    )
+
+    assert success is True
+
+    assert commands == [
+        [
+            "sudo",
+            "journalctl",
+            "--vacuum-size=52428800",
+        ]
+    ]
+
+    assert "completada" in message.lower()
+
+
+def test_execute_journal_cleanup_stops_on_error(monkeypatch) -> None:
+    class FakeResult:
+        returncode = 1
+
+    monkeypatch.setattr(
+        cleanup.shutil,
+        "which",
+        lambda command: f"/usr/bin/{command}",
+    )
+
+    monkeypatch.setattr(
+        cleanup.subprocess,
+        "run",
+        lambda command, check=False: FakeResult(),
+    )
+
+    success, message = cleanup.execute_journal_cleanup(
+        50 * 1024 ** 2
+    )
+
+    assert success is False
+    assert "error" in message.lower()

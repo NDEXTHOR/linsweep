@@ -638,3 +638,45 @@ def execute_user_cache_cleanup(candidates: list[CleanupCandidate]) -> tuple[bool
         deleted_size,
         "Limpieza de caché del usuario completada.",
     )
+
+def execute_journal_cleanup(target_size: int) -> tuple[bool, str]:
+    if target_size <= 0:
+        return (
+            False,
+            "El tamaño objetivo debe ser mayor que cero.",
+        )
+
+    if shutil.which("journalctl") is None:
+        return (
+            False,
+            "No se encontró journalctl.",
+        )
+
+    if shutil.which("sudo") is None:
+        return (
+            False,
+            "No se encontró sudo.",
+        )
+
+    command = [
+        "sudo",
+        "journalctl",
+        f"--vacuum-size={target_size}",
+    ]
+
+    result = subprocess.run(
+        command,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return (
+            False,
+            "journalctl devolvió un error "
+            "o la operación fue interrumpida.",
+        )
+
+    return (
+        True,
+        "Limpieza del journal completada.",
+    )

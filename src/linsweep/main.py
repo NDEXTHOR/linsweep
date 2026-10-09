@@ -16,6 +16,7 @@ from linsweep.modules.pacman import (
 from linsweep.modules.journal import (
     calculate_recoverable,
     get_journal_disk_usage,
+    parse_size,
 )
 from linsweep.modules.trash import (
     get_trash_directory,
@@ -26,6 +27,7 @@ from linsweep.modules.cleanup import (
     execute_trash_cleanup,
     execute_yay_cleanup,
     execute_user_cache_cleanup,
+    execute_journal_cleanup,
     get_pacman_cleanup_candidates,
     get_trash_cleanup_candidates,
     get_yay_cleanup_candidates,
@@ -86,6 +88,17 @@ def parse_size(value: str) -> int:
             f"Tamaño inválido: {value}. "
             "Ejemplos: 500M, 1G, 2.5G"
         )
+
+def parse_journal_size(value: str) -> int:
+    size = parse_size(value)
+
+    if size is None or size <= 0:
+        raise argparse.ArgumentTypeError(
+            f"Tamaño inválido: {value}. "
+            "Ejemplos: 100M, 250M, 500M, 1G"
+        )
+
+    return size
 
 def show_disk_usage() -> None:
     total, used, free = shutil.disk_usage("/")
@@ -1472,6 +1485,155 @@ def clean_user_cache(dry_run: bool = False) -> None:
 
     print()
 
+def clean_journal(target_size: int, dry_run: bool = False) -> None:
+    print("=== LIMPIEZA DE SYSTEMD JOURNAL ===")
+    print()
+
+    current_size = get_journal_disk_usage()
+
+    if current_size is None:
+        print(
+            "No fue posible determinar "
+            "el tamaño actual del journal."
+        )
+        print()
+        return
+
+    recoverable = calculate_recoverable(
+        current_size,
+        target_size,
+    )
+
+    print(
+        f"Espacio utilizado:          "
+        f"{format_size(current_size)}"
+    )
+
+    print(
+        f"Límite solicitado:          "
+        f"{format_size(target_size)}"
+    )
+
+    print(
+        f"Recuperable estimado:       "
+        f"{format_size(recoverable)}"
+    )
+
+    print(
+        "Clasificación:              REVIEW"
+    )
+
+    print()
+
+    if recoverable == 0:
+        print(
+            "El journal ya está por debajo "
+            "del límite solicitado."
+        )
+        print()
+        return
+
+    print("Acción propuesta:")
+    print()
+
+    print(
+        "  Eliminar journals archivados antiguos "
+        "hasta aproximarse al límite solicitado."
+    )
+
+    print()
+
+    print("  Comando:")
+
+    print(
+        f"  sudo journalctl "
+        f"--vacuum-size={target_size}"
+    )
+
+    print()
+
+    print(
+        "Nota: journalctl elimina journals "
+        "archivados completos."
+    )
+
+    print(
+        "El tamaño final puede no coincidir "
+        "exactamente con el límite solicitado."
+    )
+
+    print()
+
+    if dry_run:
+        print("DRY-RUN: no se realizó ningún cambio.")
+        print()
+        return
+
+    print(
+        "Esta operación eliminará registros "
+        "archivados antiguos del journal."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "REDUCIR" para continuar: '
+        )
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "REDUCIR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, message = execute_journal_cleanup(
+        target_size
+    )
+
+    print(message)
+
+    if not success:
+        print()
+        return
+
+    final_size = get_journal_disk_usage()
+
+    if final_size is None:
+        print(
+            "La operación terminó, pero no fue posible "
+            "medir el tamaño final del journal."
+        )
+        print()
+        return
+
+    recovered = max(
+        0,
+        current_size - final_size,
+    )
+
+    print(
+        f"Tamaño anterior:            "
+        f"{format_size(current_size)}"
+    )
+
+    print(
+        f"Tamaño actual:              "
+        f"{format_size(final_size)}"
+    )
+
+    print(
+        f"Espacio recuperado:         "
+        f"{format_size(recovered)}"
+    )
+
+    print()
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
@@ -1648,8 +1810,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    return parser
+    clean_journal_parser = clean_subparsers.add_parser(
+        "journal",
+        help="Reduce journals archivados hasta un límite solicitado.",
+    )
 
+    clean_journal_parser.add_argument(
+        "--max-size",
+        required=True,
+        type=parse_journal_size,
+        help=(
+            "Tamaño máximo solicitado para el journal. "
+            "Ejemplos: 100M, 250M, 500M, 1G."
+       ),
+    )
+
+    clean_journal_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra la operación que se realizaría "
+            "sin modificar el journal."
+        ),
+    )
+
+    return parser
 
 def main() -> None:
     parser = build_parser()
@@ -1716,6 +1901,13 @@ def main() -> None:
 
         if args.clean_target == "cache":
             clean_user_cache(dry_run=args.dry_run)
+            return
+
+        if args.clean_target == "journal":
+            clean_journal(
+                target_size=args.max_size,
+                dry_run=args.dry_run,
+            )
             return
 
     show_disk_usage()
