@@ -1,6 +1,13 @@
 import argparse
 import shutil
+
 from linsweep.models import PackageStatus, RiskLevel
+from linsweep.modules.yay import scan_yay_cache
+from linsweep.modules.user_cache import scan_user_cache
+from linsweep.modules.large_files import scan_large_files
+from linsweep.modules.temp_files import scan_temp_files
+from pathlib import Path
+
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
@@ -10,18 +17,15 @@ from linsweep.modules.journal import (
     calculate_recoverable,
     get_journal_disk_usage,
 )
-from linsweep.modules.yay import scan_yay_cache
-from linsweep.modules.user_cache import scan_user_cache
-from linsweep.modules.large_files import scan_large_files
-from pathlib import Path
 from linsweep.modules.trash import (
     get_trash_directory,
     scan_trash,
 )
-from linsweep.modules.temp_files import scan_temp_files
 from linsweep.modules.cleanup import (
     execute_pacman_cleanup,
+    execute_trash_cleanup,
     get_pacman_cleanup_candidates,
+    get_trash_cleanup_candidates,
 )
 
 def format_size(size: int) -> str:
@@ -744,51 +748,34 @@ def show_trash(details: bool = False,) -> None:
             f"{oldest:%Y-%m-%d %H:%M:%S}"
         )
 
-        print()
-    print("Potencialmente revisable:")
-
+    print()
+    print("Potencialmente recuperable:")
     print(
-        f"  Archivos > 7 días:        "
-        f"{len(old)}"
+        f"  Espacio: {format_size(total_size)}"
     )
-
-    print(
-        f"  Espacio:                  "
-        f"{format_size(total_size(old))}"
-    )
-
-    print(
-        "  Clasificación:            REVIEW"
-    )
-
+    print("  Clasificación: REVIEW")
     print()
 
     if details:
-        print("Archivos a revisar (> 7 días):")
-        print()
-
-        if not old:
-            print("No se encontraron archivos antiguos.")
-            print()
-            return
-
-        old_sorted = sorted(
-            old,
-            key=lambda item: (
-                item.age_days,
-                item.size_bytes,
-            ),
-            reverse=True,
-        )
-
-        for file in old_sorted:
+        for entry in entries:
             print(
-                f"{format_size(file.size_bytes):>10}  "
-                f"{file.age_days:6.1f} días  "
-                f"{file.path}"
+                f"{format_size(entry.size_bytes):>10}  "
+                f"{entry.name}"
             )
 
-        print()
+            if entry.original_path:
+                print(
+                    f"            Origen: "
+                    f"{entry.original_path}"
+                )
+
+            if entry.deletion_date:
+                print(
+                    f"            Eliminado: "
+                    f"{entry.deletion_date:%Y-%m-%d %H:%M:%S}"
+                )
+
+            print()
 
 def show_temp_files(details: bool = False,) -> None:
     print("=== ARCHIVOS TEMPORALES ===")
@@ -1095,6 +1082,134 @@ def clean_pacman_cache(dry_run: bool = False,) -> None:
 
     print()
 
+def clean_trash(dry_run: bool = False,) -> None:
+    print("=== LIMPIEZA DE PAPELERA ===")
+    print()
+
+    entries = get_trash_cleanup_candidates()
+
+    if not entries:
+        print("La papelera está vacía.")
+        print()
+        return
+
+    total_size = sum(
+        entry.size_bytes
+        for entry in entries
+    )
+
+    print(
+        f"Elementos encontrados:      "
+        f"{len(entries)}"
+    )
+
+    print(
+        f"Espacio recuperable:        "
+        f"{format_size(total_size)}"
+    )
+
+    print()
+    print("Elementos que se eliminarían:")
+    print()
+
+    for entry in entries:
+        print(
+            f"{format_size(entry.size_bytes):>10}  "
+            f"{entry.name}"
+        )
+
+        if entry.original_path:
+            print(
+                f"            Origen: "
+                f"{entry.original_path}"
+            )
+
+        if entry.deletion_date:
+            print(
+                f"            Eliminado: "
+                f"{entry.deletion_date:%Y-%m-%d %H:%M:%S}"
+            )
+
+        print()
+
+    if dry_run:
+        print(
+            "DRY-RUN: no se realizó "
+            "ningún cambio."
+        )
+        print()
+        return
+
+    print(
+        "ADVERTENCIA: los elementos mostrados "
+        "serán eliminados permanentemente."
+    )
+
+    print(
+        "LinSweep no podrá restaurarlos después."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "VACIAR" para continuar: '
+        )
+
+    except (
+        KeyboardInterrupt,
+        EOFError,
+    ):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "VACIAR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, deleted_count, message = (
+        execute_trash_cleanup(entries)
+    )
+
+    print(message)
+
+    print(
+        f"Elementos eliminados:       "
+        f"{deleted_count}"
+    )
+
+    remaining = (
+        get_trash_cleanup_candidates()
+    )
+
+    remaining_size = sum(
+        entry.size_bytes
+        for entry in remaining
+    )
+
+    recovered = max(
+        0,
+        total_size - remaining_size,
+    )
+
+    print(
+        f"Espacio recuperado estimado: "
+        f"{format_size(recovered)}"
+    )
+
+    if not success:
+        print(
+            "La limpieza no terminó completamente. "
+            "Ejecuta 'linsweep trash' para revisar "
+            "el estado actual."
+        )
+
+    print()
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
@@ -1227,6 +1342,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    clean_trash_parser = (
+        clean_subparsers.add_parser(
+            "trash",
+            help="Vacía la papelera del usuario.",
+        )
+    )
+
+    clean_trash_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra exactamente qué se eliminaría "
+            "sin modificar la papelera."
+        ),
+    )
+
     return parser
 
 
@@ -1283,6 +1414,12 @@ def main() -> None:
     if args.command == "clean":
         if args.clean_target == "packages":
             clean_pacman_cache(
+                dry_run=args.dry_run
+            )
+            return
+        
+    if args.clean_target == "trash":
+            clean_trash(
                 dry_run=args.dry_run
             )
             return

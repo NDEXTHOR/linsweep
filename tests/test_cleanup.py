@@ -4,11 +4,7 @@ import linsweep.modules.cleanup as cleanup
 from linsweep.models import CachedPackage, PackageStatus
 
 
-def make_package(
-    name: str,
-    status: PackageStatus,
-    size: int = 1024,
-) -> CachedPackage:
+def make_package(name: str, status: PackageStatus, size: int = 1024) -> CachedPackage:
     return CachedPackage(
         name=name,
         version="1.0-1",
@@ -22,9 +18,7 @@ def make_package(
     )
 
 
-def test_cleanup_candidates_only_old_and_not_installed(
-    monkeypatch,
-) -> None:
+def test_cleanup_candidates_only_old_and_not_installed(monkeypatch) -> None:
     packages = [
         make_package(
             "installed",
@@ -60,9 +54,7 @@ def test_cleanup_candidates_only_old_and_not_installed(
         lambda items: items,
     )
 
-    candidates = (
-        cleanup.get_pacman_cleanup_candidates()
-    )
+    candidates = cleanup.get_pacman_cleanup_candidates()
 
     assert len(candidates) == 2
 
@@ -77,9 +69,7 @@ def test_cleanup_candidates_only_old_and_not_installed(
     }
 
 
-def test_cleanup_candidates_sorted_by_size(
-    monkeypatch,
-) -> None:
+def test_cleanup_candidates_sorted_by_size(monkeypatch) -> None:
     packages = [
         make_package(
             "small",
@@ -110,9 +100,7 @@ def test_cleanup_candidates_sorted_by_size(
         lambda items: items,
     )
 
-    candidates = (
-        cleanup.get_pacman_cleanup_candidates()
-    )
+    candidates = cleanup.get_pacman_cleanup_candidates()
 
     assert [
         package.name
@@ -124,9 +112,7 @@ def test_cleanup_candidates_sorted_by_size(
     ]
 
 
-def test_execute_cleanup_requires_paccache(
-    monkeypatch,
-) -> None:
+def test_execute_cleanup_requires_paccache(monkeypatch) -> None:
     def fake_which(command: str):
         if command == "paccache":
             return None
@@ -139,28 +125,20 @@ def test_execute_cleanup_requires_paccache(
         fake_which,
     )
 
-    success, message = (
-        cleanup.execute_pacman_cleanup()
-    )
+    success, message = cleanup.execute_pacman_cleanup()
 
     assert success is False
     assert "paccache" in message
 
 
-def test_execute_cleanup_runs_expected_commands(
-    monkeypatch,
-) -> None:
+def test_execute_cleanup_runs_expected_commands(monkeypatch) -> None:
     commands = []
 
     class FakeResult:
         returncode = 0
 
-    def fake_run(
-        command,
-        check=False,
-    ):
+    def fake_run(command, check=False):
         commands.append(command)
-
         return FakeResult()
 
     monkeypatch.setattr(
@@ -175,9 +153,7 @@ def test_execute_cleanup_runs_expected_commands(
         fake_run,
     )
 
-    success, message = (
-        cleanup.execute_pacman_cleanup()
-    )
+    success, message = cleanup.execute_pacman_cleanup()
 
     assert success is True
 
@@ -199,30 +175,18 @@ def test_execute_cleanup_runs_expected_commands(
         ],
     ]
 
-    assert (
-        "completada"
-        in message.lower()
-    )
+    assert "completada" in message.lower()
 
 
-def test_execute_cleanup_stops_on_error(
-    monkeypatch,
-) -> None:
+def test_execute_cleanup_stops_on_error(monkeypatch) -> None:
     commands = []
 
     class FakeResult:
-        def __init__(
-            self,
-            returncode: int,
-        ):
+        def __init__(self, returncode: int):
             self.returncode = returncode
 
-    def fake_run(
-        command,
-        check=False,
-    ):
+    def fake_run(command, check=False):
         commands.append(command)
-
         return FakeResult(1)
 
     monkeypatch.setattr(
@@ -237,17 +201,161 @@ def test_execute_cleanup_stops_on_error(
         fake_run,
     )
 
-    success, message = (
-        cleanup.execute_pacman_cleanup()
-    )
+    success, message = cleanup.execute_pacman_cleanup()
 
     assert success is False
-
     assert len(commands) == 1
 
     assert (
-        "error"
-        in message.lower()
-        or "interrumpida"
-        in message.lower()
+        "error" in message.lower()
+        or "interrumpida" in message.lower()
     )
+
+
+def test_get_trash_cleanup_candidates(monkeypatch) -> None:
+    entries = [
+        cleanup.TrashEntry(
+            name="example.txt",
+            path=Path("/tmp/example.txt"),
+            size_bytes=1024,
+        )
+    ]
+
+    monkeypatch.setattr(
+        cleanup,
+        "scan_trash",
+        lambda: entries,
+    )
+
+    result = cleanup.get_trash_cleanup_candidates()
+
+    assert result == entries
+
+
+def test_execute_trash_cleanup_removes_file_and_metadata(tmp_path: Path, monkeypatch) -> None:
+    trash_directory = tmp_path / "Trash"
+    files_directory = trash_directory / "files"
+    info_directory = trash_directory / "info"
+
+    files_directory.mkdir(parents=True)
+    info_directory.mkdir(parents=True)
+
+    file_path = files_directory / "example.txt"
+
+    file_path.write_text(
+        "LinSweep",
+        encoding="utf-8",
+    )
+
+    info_path = info_directory / "example.txt.trashinfo"
+
+    info_path.write_text(
+        "[Trash Info]\n"
+        "Path=/home/user/example.txt\n",
+        encoding="utf-8",
+    )
+
+    entry = cleanup.TrashEntry(
+        name="example.txt",
+        path=file_path,
+        size_bytes=file_path.stat().st_size,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_trash_directory",
+        lambda: trash_directory,
+    )
+
+    success, deleted_count, message = cleanup.execute_trash_cleanup(
+        [entry]
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert not file_path.exists()
+    assert not info_path.exists()
+    assert "correctamente" in message.lower()
+
+
+def test_execute_trash_cleanup_removes_directory(tmp_path: Path, monkeypatch) -> None:
+    trash_directory = tmp_path / "Trash"
+    files_directory = trash_directory / "files"
+    info_directory = trash_directory / "info"
+
+    directory = files_directory / "folder"
+    directory.mkdir(parents=True)
+
+    info_directory.mkdir(parents=True)
+
+    nested_file = directory / "example.txt"
+
+    nested_file.write_text(
+        "LinSweep",
+        encoding="utf-8",
+    )
+
+    info_path = info_directory / "folder.trashinfo"
+
+    info_path.write_text(
+        "[Trash Info]\n"
+        "Path=/home/user/folder\n",
+        encoding="utf-8",
+    )
+
+    entry = cleanup.TrashEntry(
+        name="folder",
+        path=directory,
+        size_bytes=nested_file.stat().st_size,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_trash_directory",
+        lambda: trash_directory,
+    )
+
+    success, deleted_count, _ = cleanup.execute_trash_cleanup(
+        [entry]
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert not directory.exists()
+    assert not info_path.exists()
+
+
+def test_execute_trash_cleanup_rejects_path_outside_trash(tmp_path: Path, monkeypatch) -> None:
+    trash_directory = tmp_path / "Trash"
+
+    (trash_directory / "files").mkdir(
+        parents=True
+    )
+
+    outside_file = tmp_path / "important.txt"
+
+    outside_file.write_text(
+        "No borrar",
+        encoding="utf-8",
+    )
+
+    entry = cleanup.TrashEntry(
+        name="important.txt",
+        path=outside_file,
+        size_bytes=outside_file.stat().st_size,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_trash_directory",
+        lambda: trash_directory,
+    )
+
+    success, deleted_count, message = cleanup.execute_trash_cleanup(
+        [entry]
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert outside_file.exists()
+    assert "fuera" in message.lower()
