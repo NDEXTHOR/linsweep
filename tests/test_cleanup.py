@@ -1,8 +1,13 @@
 from pathlib import Path
 
 import linsweep.modules.cleanup as cleanup
-from linsweep.models import CachedPackage, PackageStatus, YayCacheEntry
-
+from linsweep.models import (
+    CachedPackage,
+    CleanupCandidate,
+    PackageStatus,
+    RiskLevel,
+    YayCacheEntry,
+)
 
 def make_package(name: str, status: PackageStatus, size: int = 1024) -> CachedPackage:
     return CachedPackage(
@@ -506,3 +511,274 @@ def test_execute_yay_cleanup_unlinks_symlink_without_deleting_target(tmp_path: P
     assert deleted_count == 1
     assert not symlink.exists()
     assert target_file.exists()
+
+def test_user_cache_cleanup_candidates_separates_available_and_in_use(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / ".cache"
+    cache_root.mkdir()
+
+    available_path = cache_root / "available"
+    in_use_path = cache_root / "in-use"
+    review_path = cache_root / "review"
+    symlink_path = cache_root / "symlink"
+
+    available_path.mkdir()
+    in_use_path.mkdir()
+    review_path.mkdir()
+
+    open_file = in_use_path / "cache.bin"
+    open_file.write_text(
+        "en uso",
+        encoding="utf-8",
+    )
+
+    symlink_target = tmp_path / "target"
+    symlink_target.mkdir()
+
+    symlink_path.symlink_to(
+        symlink_target,
+        target_is_directory=True,
+    )
+
+    entries = [
+        CleanupCandidate(
+            name="available",
+            path=available_path,
+            size_bytes=100,
+            description="Prueba.",
+            risk=RiskLevel.SAFE,
+        ),
+        CleanupCandidate(
+            name="in-use",
+            path=in_use_path,
+            size_bytes=200,
+            description="Prueba.",
+            risk=RiskLevel.SAFE,
+        ),
+        CleanupCandidate(
+            name="review",
+            path=review_path,
+            size_bytes=300,
+            description="Prueba.",
+            risk=RiskLevel.REVIEW,
+        ),
+        CleanupCandidate(
+            name="symlink",
+            path=symlink_path,
+            size_bytes=400,
+            description="Prueba.",
+            risk=RiskLevel.SAFE,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        cleanup,
+        "USER_CACHE",
+        cache_root,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "scan_user_cache",
+        lambda: entries,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: {
+            open_file.resolve(),
+        },
+    )
+
+    candidates, in_use, blocked = cleanup.get_user_cache_cleanup_candidates()
+
+    assert [
+        candidate.name
+        for candidate in candidates
+    ] == [
+        "available",
+    ]
+
+    assert [
+        candidate.name
+        for candidate in in_use
+    ] == [
+        "in-use",
+    ]
+
+    assert [
+        candidate.name
+        for candidate in blocked
+    ] == [
+        "symlink",
+    ]
+
+
+def test_execute_user_cache_cleanup_removes_safe_directory(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / ".cache"
+    cache_path = cache_root / "example"
+
+    cache_path.mkdir(
+        parents=True
+    )
+
+    cached_file = cache_path / "cache.bin"
+    cached_file.write_bytes(
+        b"x" * 1024
+    )
+
+    candidate = CleanupCandidate(
+        name="example",
+        path=cache_path,
+        size_bytes=1024,
+        description="Prueba.",
+        risk=RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "USER_CACHE",
+        cache_root,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_user_cache_cleanup(
+        [candidate]
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert deleted_size == 1024
+    assert not cache_path.exists()
+    assert "completada" in message.lower()
+
+
+def test_execute_user_cache_cleanup_rejects_non_safe_candidate(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / ".cache"
+    cache_path = cache_root / "important"
+
+    cache_path.mkdir(
+        parents=True
+    )
+
+    candidate = CleanupCandidate(
+        name="important",
+        path=cache_path,
+        size_bytes=1024,
+        description="Prueba.",
+        risk=RiskLevel.REVIEW,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "USER_CACHE",
+        cache_root,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_user_cache_cleanup(
+        [candidate]
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert cache_path.exists()
+    assert "safe" in message.lower()
+
+
+def test_execute_user_cache_cleanup_rejects_path_outside_cache(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / ".cache"
+    cache_root.mkdir()
+
+    outside_path = tmp_path / "important"
+
+    outside_path.mkdir()
+
+    candidate = CleanupCandidate(
+        name="important",
+        path=outside_path,
+        size_bytes=1024,
+        description="Prueba.",
+        risk=RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "USER_CACHE",
+        cache_root,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_user_cache_cleanup(
+        [candidate]
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert outside_path.exists()
+    assert "fuera" in message.lower()
+
+
+def test_execute_user_cache_cleanup_rejects_cache_in_use(tmp_path: Path, monkeypatch) -> None:
+    cache_root = tmp_path / ".cache"
+    cache_path = cache_root / "example"
+
+    cache_path.mkdir(
+        parents=True
+    )
+
+    open_file = cache_path / "cache.bin"
+
+    open_file.write_text(
+        "en uso",
+        encoding="utf-8",
+    )
+
+    candidate = CleanupCandidate(
+        name="example",
+        path=cache_path,
+        size_bytes=open_file.stat().st_size,
+        description="Prueba.",
+        risk=RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "USER_CACHE",
+        cache_root,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: {
+            open_file.resolve(),
+        },
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_user_cache_cleanup(
+        [candidate]
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert cache_path.exists()
+    assert "en uso" in message.lower()

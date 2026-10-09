@@ -25,9 +25,11 @@ from linsweep.modules.cleanup import (
     execute_pacman_cleanup,
     execute_trash_cleanup,
     execute_yay_cleanup,
+    execute_user_cache_cleanup,
     get_pacman_cleanup_candidates,
     get_trash_cleanup_candidates,
     get_yay_cleanup_candidates,
+    get_user_cache_cleanup_candidates,
 )
 
 def format_size(size: int) -> str:
@@ -1330,6 +1332,146 @@ def clean_yay(dry_run: bool = False) -> None:
 
     print()
 
+def clean_user_cache(dry_run: bool = False) -> None:
+    print("=== LIMPIEZA DE CACHÉ DEL USUARIO ===")
+    print()
+
+    candidates, in_use, blocked = get_user_cache_cleanup_candidates()
+
+    if in_use:
+        print("Omitidas porque están en uso:")
+        print()
+
+        for candidate in in_use:
+            print(
+                f"{format_size(candidate.size_bytes):>10}  "
+                f"{candidate.path}"
+            )
+
+        print()
+
+    if blocked:
+        print("Omitidas por seguridad:")
+        print()
+
+        for candidate in blocked:
+            print(
+                f"{format_size(candidate.size_bytes):>10}  "
+                f"{candidate.path}"
+            )
+
+        print()
+
+    if not candidates:
+        print(
+            "No se encontraron cachés SAFE disponibles "
+            "para limpiar."
+        )
+        print()
+        return
+
+    total_size = sum(
+        candidate.size_bytes
+        for candidate in candidates
+    )
+
+    directory_word = (
+        "directorio"
+        if len(candidates) == 1
+        else "directorios"
+    )
+
+    print(
+        f"Cachés disponibles:         "
+        f"{len(candidates)} {directory_word}"
+    )
+
+    print(
+        f"Espacio recuperable:        "
+        f"{format_size(total_size)}"
+    )
+
+    print(
+        "Clasificación:              SAFE"
+    )
+
+    print()
+    print("Directorios que se eliminarían:")
+    print()
+
+    for candidate in candidates:
+        print(
+            f"{format_size(candidate.size_bytes):>10}  "
+            f"{candidate.path}"
+        )
+
+    print()
+
+    if dry_run:
+        print("DRY-RUN: no se realizó ningún cambio.")
+        print()
+        return
+
+    print(
+        "LinSweep eliminará únicamente las cachés SAFE "
+        "mostradas arriba."
+    )
+
+    print(
+        "Las cachés REVIEW, UNKNOWN, en uso o bloqueadas "
+        "no serán eliminadas."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "ELIMINAR" para continuar: '
+        )
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "ELIMINAR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, deleted_count, deleted_size, message = execute_user_cache_cleanup(
+        candidates
+    )
+
+    print(message)
+
+    print(
+        f"Cachés eliminadas:          "
+        f"{deleted_count}"
+    )
+
+    print(
+        f"Espacio recuperado estimado: "
+        f"{format_size(deleted_size)}"
+    )
+
+    if not success:
+        print()
+        print(
+            "La limpieza no terminó completamente."
+        )
+        print(
+            "LinSweep volvió a comprobar las condiciones "
+            "antes de eliminar."
+        )
+        print(
+            "Ejecuta 'linsweep cache --details' "
+            "para revisar el estado actual."
+        )
+
+    print()
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
@@ -1492,6 +1634,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    clean_cache_parser = clean_subparsers.add_parser(
+        "cache",
+        help="Analiza las cachés SAFE disponibles para limpiar.",
+    )
+ 
+    clean_cache_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra exactamente qué cachés se eliminarían "
+           "sin modificar ningún archivo."
+        ),
+    )
+
     return parser
 
 
@@ -1556,6 +1712,10 @@ def main() -> None:
 
         if args.clean_target == "yay":
             clean_yay(dry_run=args.dry_run)
+            return
+
+        if args.clean_target == "cache":
+            clean_user_cache(dry_run=args.dry_run)
             return
 
     show_disk_usage()
