@@ -1802,37 +1802,97 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
         description=(
-            "Herramienta de análisis y mantenimiento "
-            "seguro para Linux."
+            "LinSweep - análisis y mantenimiento seguro para Arch Linux.\n\n"
+            "LinSweep analiza el sistema antes de modificarlo, muestra los "
+            "elementos encontrados y permite al usuario decidir qué limpiar."
         ),
+        epilog=(
+            "Ejemplos:\n"
+            "  linsweep\n"
+            "  linsweep packages --details\n"
+            "  linsweep cache --details\n"
+            "  linsweep large-files --min-size 1G\n"
+            "  linsweep clean packages --dry-run\n"
+            "  linsweep clean temp --older-than 7 --dry-run\n"
+            "\n"
+            "Principio de LinSweep:\n"
+            "  Analizar -> explicar -> mostrar -> usuario decide -> ejecutar"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
+    parser._optionals.title = "opciones"
+
     subparsers = parser.add_subparsers(
-        dest="command"
+        dest="command",
+        metavar="COMANDO",
+        title="comandos",
+        description=(
+            "Ejecuta 'linsweep COMANDO --help' para ver las opciones "
+            "específicas de cada comando."
+        ),
     )
 
     packages_parser = subparsers.add_parser(
         "packages",
-        help="Analiza la caché de paquetes de Pacman.",
+        help="Analiza la caché de Pacman y los paquetes huérfanos.",
+        description=(
+            "Analiza la caché de paquetes de Pacman, clasifica versiones "
+            "antiguas o no instaladas y muestra paquetes huérfanos."
+        ),
     )
 
     packages_parser.add_argument(
         "--details",
         action="store_true",
-        help=(
-            "Muestra los paquetes antiguos y "
-            "los paquetes no instalados."
-        ),
+        help="Muestra información detallada de los paquetes encontrados.",
     )
 
     subparsers.add_parser(
         "journal",
         help="Analiza el espacio utilizado por systemd journal.",
+        description=(
+            "Muestra cuánto espacio ocupa actualmente systemd journal."
+        ),
+    )
+
+    yay_parser = subparsers.add_parser(
+        "yay",
+        help="Analiza la caché de Yay/AUR.",
+        description=(
+            "Analiza la caché de Yay y clasifica paquetes compilados, "
+            "fuentes descargadas, repositorios Git y metadatos."
+        ),
+    )
+
+    yay_parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Muestra información detallada de cada directorio de Yay.",
+    )
+
+    cache_parser = subparsers.add_parser(
+        "cache",
+        help="Analiza la caché del usuario.",
+        description=(
+            "Analiza ~/.cache y clasifica sus directorios según el nivel "
+            "de riesgo de una posible limpieza."
+        ),
+    )
+
+    cache_parser.add_argument(
+        "--details",
+        action="store_true",
+        help="Muestra todos los directorios de caché encontrados.",
     )
 
     large_files_parser = subparsers.add_parser(
         "large-files",
-        help="Busca archivos grandes en el directorio del usuario.",
+        help="Busca archivos grandes.",
+        description=(
+            "Busca archivos que superen un tamaño mínimo. "
+            "Este comando solo analiza; nunca elimina archivos."
+        ),
     )
 
     large_files_parser.add_argument(
@@ -1841,8 +1901,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=500 * 1024 * 1024,
         metavar="TAMAÑO",
         help=(
-            "Tamaño mínimo del archivo. "
-            "Ejemplos: 100M, 500M, 1G. "
+            "Tamaño mínimo. Ejemplos: 100M, 500M, 1G. "
             "Predeterminado: 500M."
         ),
     )
@@ -1861,17 +1920,25 @@ def build_parser() -> argparse.ArgumentParser:
     trash_parser = subparsers.add_parser(
         "trash",
         help="Analiza la papelera del usuario.",
+        description=(
+            "Muestra los elementos almacenados en la papelera y el espacio "
+            "que ocupan."
+        ),
     )
 
     trash_parser.add_argument(
         "--details",
         action="store_true",
-        help="Muestra los elementos de la papelera.",
+        help="Muestra los elementos individuales de la papelera.",
     )
 
     temp_parser = subparsers.add_parser(
         "temp",
         help="Analiza archivos temporales del usuario.",
+        description=(
+            "Analiza archivos propios encontrados en /tmp y /var/tmp "
+            "sin eliminar nada."
+        ),
     )
 
     temp_parser.add_argument(
@@ -1880,147 +1947,144 @@ def build_parser() -> argparse.ArgumentParser:
         help="Muestra los archivos temporales encontrados.",
     )
 
-    yay_parser = subparsers.add_parser(
-        "yay",
-        help="Analiza la caché de Yay/AUR.",
-    )
-
-    yay_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Muestra el tamaño de cada directorio de Yay.",
-    )
-
-    cache_parser = subparsers.add_parser(
-        "cache",
-        help="Analiza la caché del usuario.",
-    )
-
-    cache_parser.add_argument(
-        "--details",
-        action="store_true",
-        help="Muestra todos los directorios de caché.",
-    )
-
     clean_parser = subparsers.add_parser(
         "clean",
-        help="Ejecuta operaciones de limpieza seguras.",
+        help="Ejecuta operaciones de limpieza controlada.",
+        description=(
+            "Ejecuta limpiezas después de mostrar qué elementos serán "
+            "afectados. Las operaciones sensibles requieren confirmación."
+        ),
+        epilog=(
+            "Ejemplos:\n"
+            "  linsweep clean packages --dry-run\n"
+            "  linsweep clean cache --dry-run\n"
+            "  linsweep clean yay --dry-run\n"
+            "  linsweep clean trash --dry-run\n"
+            "  linsweep clean journal --max-size 100M --dry-run\n"
+            "  linsweep clean temp --older-than 7 --dry-run"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    clean_subparsers = (
-        clean_parser.add_subparsers(
-            dest="clean_target",
-            required=True,
-        )
+    clean_parser._optionals.title = "opciones"
+
+    clean_subparsers = clean_parser.add_subparsers(
+        dest="clean_target",
+        required=True,
+        metavar="OBJETIVO",
+        title="objetivos de limpieza",
     )
 
-    clean_packages_parser = (
-        clean_subparsers.add_parser(
-            "packages",
-            help="Limpia la caché antigua de Pacman.",
-        )
+    clean_packages_parser = clean_subparsers.add_parser(
+        "packages",
+        help="Limpia paquetes antiguos de la caché de Pacman.",
+        description=(
+            "Elimina versiones antiguas y paquetes cacheados que ya no "
+            "están instalados mediante paccache."
+        ),
     )
 
     clean_packages_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra exactamente qué se eliminaría "
-            "sin modificar el sistema."
-        ),
+        help="Muestra qué se eliminaría sin modificar el sistema.",
     )
 
-    clean_trash_parser = (
-        clean_subparsers.add_parser(
-            "trash",
-            help="Vacía la papelera del usuario.",
-        )
+    clean_trash_parser = clean_subparsers.add_parser(
+        "trash",
+        help="Vacía la papelera del usuario.",
+        description=(
+            "Elimina los elementos mostrados de la papelera del usuario."
+        ),
     )
 
     clean_trash_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra exactamente qué se eliminaría "
-            "sin modificar la papelera."
-        ),
+        help="Muestra qué se eliminaría sin modificar la papelera.",
     )
 
     clean_yay_parser = clean_subparsers.add_parser(
         "yay",
-        help="Limpia fuentes descargadas de la caché de Yay.",
+        help="Limpia fuentes descargadas de Yay.",
+        description=(
+            "Elimina únicamente fuentes descargadas consideradas seguras. "
+            "No elimina paquetes compilados, repositorios Git ni metadatos."
+        ),
     )
 
     clean_yay_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra exactamente qué se eliminaría "
-            "sin modificar la caché de Yay."
-        ),
+        help="Muestra qué se eliminaría sin modificar la caché de Yay.",
     )
 
     clean_cache_parser = clean_subparsers.add_parser(
         "cache",
-        help="Analiza las cachés SAFE disponibles para limpiar.",
+        help="Limpia cachés clasificadas como SAFE.",
+        description=(
+            "Elimina únicamente cachés clasificadas como SAFE y vuelve "
+            "a comprobar que no estén en uso antes de borrarlas."
+        ),
     )
- 
+
     clean_cache_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra exactamente qué cachés se eliminarían "
-           "sin modificar ningún archivo."
-        ),
+        help="Muestra qué cachés se eliminarían sin modificar archivos.",
     )
 
     clean_journal_parser = clean_subparsers.add_parser(
         "journal",
-        help="Reduce journals archivados hasta un límite solicitado.",
+        help="Reduce el tamaño de systemd journal.",
+        description=(
+            "Elimina journals archivados antiguos mediante journalctl "
+            "hasta aproximarse al límite solicitado."
+        ),
     )
 
     clean_journal_parser.add_argument(
         "--max-size",
         required=True,
         type=parse_journal_size,
+        metavar="TAMAÑO",
         help=(
-            "Tamaño máximo solicitado para el journal. "
+            "Tamaño máximo solicitado. "
             "Ejemplos: 100M, 250M, 500M, 1G."
-       ),
+        ),
     )
 
     clean_journal_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra la operación que se realizaría "
-            "sin modificar el journal."
-        ),
+        help="Muestra la operación sin modificar el journal.",
     )
 
     clean_temp_parser = clean_subparsers.add_parser(
         "temp",
-        help="Analiza archivos temporales antiguos para limpieza.",
+        help="Limpia archivos temporales antiguos.",
+        description=(
+            "Selecciona archivos temporales propios suficientemente antiguos, "
+            "bloquea elementos sensibles y vuelve a validar cada archivo "
+            "antes de eliminarlo."
+        ),
     )
 
     clean_temp_parser.add_argument(
         "--older-than",
         type=parse_positive_days,
         default=7.0,
-        metavar="DAYS",
+        metavar="DÍAS",
         help=(
-            "Considera archivos con al menos esta "
-            "antigüedad. Por defecto: 7 días."
+            "Antigüedad mínima del archivo. "
+            "Predeterminado: 7 días."
         ),
     )
 
     clean_temp_parser.add_argument(
         "--dry-run",
         action="store_true",
-        help=(
-            "Muestra exactamente qué archivos se eliminarían "
-            "sin modificar nada."
-        ),
+        help="Muestra qué archivos se eliminarían sin modificar nada.",
     )
 
     return parser
@@ -2098,7 +2162,7 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
             return
-        
+
         if args.clean_target == "temp":
             clean_temp(
                 older_than_days=args.older_than,

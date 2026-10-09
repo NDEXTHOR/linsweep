@@ -731,7 +731,7 @@ def get_temp_cleanup_candidates(min_age_days: float = 7.0) -> tuple[list[TempFil
         if path.is_symlink():
             blocked.append(item)
             continue
-       
+
         if is_temp_coordination_file(path):
             blocked.append(item)
             continue
@@ -1046,4 +1046,3 @@ def is_temp_coordination_file(path: Path) -> bool:
         return True
 
     return name.endswith(TEMP_COORDINATION_ENDINGS)
-

@@ -1,133 +1,281 @@
 # LinSweep
 
-**LinSweep** es una herramienta modular de análisis y mantenimiento para **Arch Linux**.
+LinSweep es una herramienta CLI de análisis y mantenimiento seguro para **Arch Linux**, diseñada para ayudar a identificar espacio recuperable y realizar tareas de limpieza sin eliminar archivos a ciegas.
 
-Su objetivo es analizar el sistema, identificar espacio en disco potencialmente recuperable, clasificar las posibles acciones de limpieza según su riesgo y explicar al usuario qué puede eliminarse antes de realizar cualquier operación destructiva.
+Su principio es sencillo:
 
-> **LinSweep se encuentra actualmente en desarrollo.**
+**Analizar → explicar → mostrar → usuario decide → ejecutar**
 
-## Filosofía
+LinSweep intenta separar claramente el análisis de la eliminación. Antes de realizar una limpieza, muestra qué encontró, cuánto espacio está involucrado y qué elementos serían afectados.
 
-LinSweep sigue un principio sencillo:
+> LinSweep está actualmente en desarrollo.
 
-> **Analizar primero. Explicar después. Limpiar solo con confirmación.**
-
-La herramienta busca evitar limpiezas agresivas o la eliminación indiscriminada de archivos.
-
-LinSweep no debería:
-
-- Eliminar archivos desconocidos automáticamente.
-- Realizar operaciones destructivas sin confirmación.
-- Utilizar privilegios de administrador para tareas que no los necesitan.
-- Considerar todo archivo de caché como innecesario.
-
-Antes de realizar una limpieza, el objetivo es mostrar qué se encontró, cuánto espacio ocupa, qué función tiene y qué riesgo supondría eliminarlo.
-
-## Funciones actuales
+## Características
 
 ### Caché de Pacman
 
-LinSweep puede analizar `/var/cache/pacman/pkg` y clasificar los paquetes almacenados como:
-
-- Versión actualmente instalada.
-- Versión de respaldo.
-- Versión antigua.
-- Versión más nueva que la instalada.
-- Paquete que ya no está instalado.
-
-También calcula cuánto espacio podría recuperarse eliminando versiones antiguas y paquetes que ya no se encuentran instalados.
-
-### Systemd Journal
-
-Permite consultar cuánto espacio están utilizando los registros de `systemd-journald` y estimar cuánto podría recuperarse estableciendo diferentes límites de almacenamiento.
-
-Por ahora únicamente realiza análisis y no modifica los registros.
-
-### Caché de Yay / AUR
-
-LinSweep analiza `~/.cache/yay` y diferencia entre:
-
-- Paquetes compilados correspondientes a la versión instalada.
-- Paquetes compilados antiguos.
-- Paquetes compilados más nuevos.
-- Paquetes de software que ya no está instalado.
-- Fuentes descargadas.
-- Repositorios Git.
-- Metadatos del AUR.
-- Otros archivos.
-
-Esto permite diferenciar archivos reconstruibles de información que puede resultar útil conservar.
-
-### Caché de usuario
-
-LinSweep puede analizar los directorios contenidos en:
-
-```text
-~/.cache
-```
-
-y mostrar qué aplicaciones están utilizando más espacio.
-
-Este módulo se encuentra actualmente en desarrollo y posteriormente clasificará las cachés según su nivel de riesgo.
-
-## Comandos disponibles
-
-Mostrar un resumen general:
-
-```bash
-linsweep
-```
-
-Analizar la caché de Pacman:
+Analiza `/var/cache/pacman/pkg` y clasifica los paquetes almacenados según su relación con los paquetes actualmente instalados.
 
 ```bash
 linsweep packages
-```
-
-Mostrar los paquetes considerados antiguos o no instalados:
-
-```bash
 linsweep packages --details
 ```
 
-Analizar `systemd journal`:
+Puede identificar, entre otros:
+
+- versiones actuales;
+- versiones antiguas;
+- paquetes que ya no están instalados;
+- paquetes huérfanos instalados en el sistema.
+
+La limpieza utiliza `paccache` en lugar de eliminar archivos directamente.
+
+```bash
+linsweep clean packages --dry-run
+linsweep clean packages
+```
+
+---
+
+### systemd journal
+
+Muestra el espacio utilizado actualmente por `systemd-journald`.
 
 ```bash
 linsweep journal
 ```
 
-Analizar la caché de Yay:
+También puede reducir los journals archivados hasta aproximarse a un límite indicado por el usuario.
+
+```bash
+linsweep clean journal --max-size 100M --dry-run
+linsweep clean journal --max-size 100M
+```
+
+LinSweep utiliza `journalctl --vacuum-size` y muestra la operación antes de ejecutarla.
+
+---
+
+### Caché de Yay / AUR
+
+Analiza los directorios almacenados en:
+
+```text
+~/.cache/yay
+```
+
+y diferencia elementos como:
+
+- paquetes compilados;
+- versiones antiguas;
+- fuentes descargadas;
+- repositorios Git;
+- metadatos.
 
 ```bash
 linsweep yay
-```
-
-Mostrar información detallada de la caché de Yay:
-
-```bash
 linsweep yay --details
 ```
 
-Analizar la caché del usuario:
+La limpieza actual elimina únicamente fuentes descargadas seleccionadas como seguras.
+
+```bash
+linsweep clean yay --dry-run
+linsweep clean yay
+```
+
+No elimina automáticamente paquetes compilados, repositorios Git ni metadatos AUR.
+
+---
+
+### Caché del usuario
+
+Analiza los directorios dentro de:
+
+```text
+~/.cache
+```
+
+y los clasifica según el riesgo asociado a una posible limpieza.
 
 ```bash
 linsweep cache
-```
-
-Mostrar todos los directorios encontrados:
-
-```bash
 linsweep cache --details
 ```
 
-## Instalación para desarrollo
+LinSweep utiliza niveles de riesgo como:
 
-Actualmente LinSweep todavía está en desarrollo y no cuenta con un paquete estable.
+- `SAFE`
+- `REVIEW`
+- `DANGEROUS`
+- `UNKNOWN`
+
+La limpieza automática solo considera entradas clasificadas como `SAFE`.
+
+```bash
+linsweep clean cache --dry-run
+linsweep clean cache
+```
+
+Antes de eliminar una caché, LinSweep comprueba nuevamente que no esté siendo utilizada por procesos del usuario.
+
+---
+
+### Archivos grandes
+
+Busca archivos que superen un tamaño determinado.
+
+```bash
+linsweep large-files
+```
+
+El tamaño mínimo predeterminado es de `500M`.
+
+También puede indicarse otro límite:
+
+```bash
+linsweep large-files --min-size 1G
+```
+
+o analizar otra ruta:
+
+```bash
+linsweep large-files --path ~/Descargas --min-size 100M
+```
+
+Este módulo es únicamente de análisis y **nunca elimina archivos**.
+
+---
+
+### Papelera
+
+Analiza la papelera del usuario y muestra cuánto espacio ocupa.
+
+```bash
+linsweep trash
+linsweep trash --details
+```
+
+Puede mostrar previamente qué se eliminaría:
+
+```bash
+linsweep clean trash --dry-run
+```
+
+y posteriormente vaciarla:
+
+```bash
+linsweep clean trash
+```
+
+---
+
+### Archivos temporales
+
+Analiza archivos pertenecientes al usuario dentro de:
+
+```text
+/tmp
+/var/tmp
+```
+
+```bash
+linsweep temp
+linsweep temp --details
+```
+
+Para la limpieza, LinSweep aplica varias comprobaciones antes de considerar un archivo candidato:
+
+- debe pertenecer al usuario actual;
+- debe ser un archivo regular;
+- no puede ser un enlace simbólico;
+- debe permanecer dentro de un directorio temporal permitido;
+- debe superar la antigüedad mínima;
+- no debe estar siendo utilizado por un proceso del usuario;
+- archivos de coordinación como PID, locks, sockets o archivos de estado son bloqueados.
+
+La antigüedad mínima predeterminada es de **7 días**.
+
+```bash
+linsweep clean temp --dry-run
+```
+
+Puede modificarse explícitamente:
+
+```bash
+linsweep clean temp --older-than 14 --dry-run
+```
+
+Para ejecutar la limpieza:
+
+```bash
+linsweep clean temp
+```
+
+Los archivos temporales permanecen clasificados como `REVIEW`, por lo que LinSweep muestra los candidatos y solicita confirmación antes de eliminarlos.
+
+Además, las condiciones se vuelven a comprobar inmediatamente antes de cada eliminación.
+
+---
+
+## Modo dry-run
+
+Las operaciones de limpieza soportan un modo de simulación:
+
+```bash
+--dry-run
+```
+
+Por ejemplo:
+
+```bash
+linsweep clean packages --dry-run
+linsweep clean yay --dry-run
+linsweep clean cache --dry-run
+linsweep clean trash --dry-run
+linsweep clean journal --max-size 100M --dry-run
+linsweep clean temp --older-than 7 --dry-run
+```
+
+El modo `dry-run` muestra qué haría LinSweep sin modificar ningún archivo.
+
+Es recomendable utilizarlo antes de una limpieza cuando se quiera revisar exactamente qué elementos serán afectados.
+
+---
+
+## Uso
+
+Para ver los comandos disponibles:
+
+```bash
+linsweep --help
+```
+
+También puede consultarse la ayuda de cada comando:
+
+```bash
+linsweep packages --help
+linsweep large-files --help
+linsweep clean --help
+linsweep clean temp --help
+```
+
+Ejecutar LinSweep sin argumentos:
+
+```bash
+linsweep
+```
+
+muestra un resumen general del sistema y de algunos de sus analizadores principales.
+
+---
+
+## Instalación para desarrollo
 
 Clona el repositorio:
 
 ```bash
-git clone https://github.com/NDEXTHOR/linsweep
+git clone https://github.com/NDEXTHOR/linsweep.git
 cd linsweep
 ```
 
@@ -135,93 +283,95 @@ Crea un entorno virtual:
 
 ```bash
 python -m venv .venv
-```
-
-Actívalo:
-
-```bash
 source .venv/bin/activate
 ```
 
 Instala LinSweep en modo editable:
 
 ```bash
-pip install -e .
+pip install -e ".[dev]"
 ```
 
-Después puedes ejecutar:
+Después podrás utilizar:
 
 ```bash
 linsweep
 ```
 
-## Estructura del proyecto
+desde el entorno virtual.
 
-```text
-linsweep/
-├── src/
-│   └── linsweep/
-│       ├── __init__.py
-│       ├── main.py
-│       ├── models.py
-│       └── modules/
-│           ├── __init__.py
-│           ├── journal.py
-│           ├── pacman.py
-│           ├── user_cache.py
-│           └── yay.py
-│
-├── tests/
-├── README.md
-├── LICENSE
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-└── pyproject.toml
+---
+
+## Pruebas
+
+El proyecto utiliza `pytest`.
+
+```bash
+pytest -v
 ```
 
-## Funciones planeadas
+Actualmente LinSweep cuenta con pruebas para sus analizadores, selección de candidatos y operaciones de limpieza.
 
-LinSweep podrá incorporar posteriormente:
+---
 
-- Limpieza controlada de paquetes de Pacman.
-- Limpieza de caché de Yay.
-- Análisis avanzado de cachés de usuario.
-- Detección de archivos grandes.
-- Detección de archivos duplicados.
-- Análisis de archivos temporales.
-- Soporte para Docker.
-- Soporte para libvirt/KVM.
-- Análisis de máquinas virtuales y discos sin asociación.
-- Modo `dry-run`.
-- Confirmación antes de operaciones destructivas.
-- Clasificación de acciones según riesgo.
-- Interfaz TUI interactiva.
-- Registro de operaciones realizadas.
+## Seguridad
 
-## Compatibilidad
+LinSweep intenta seguir varias reglas:
 
-Actualmente el proyecto está enfocado en:
+1. **El análisis no requiere privilegios de root siempre que sea posible.**
+2. **No se eliminan elementos desconocidos automáticamente.**
+3. **Las operaciones muestran previamente qué elementos serán afectados.**
+4. **Las limpiezas sensibles requieren confirmación explícita.**
+5. **Las rutas y condiciones se vuelven a validar antes de eliminar archivos.**
+6. **`--dry-run` permite inspeccionar las operaciones sin modificar el sistema.**
+7. **Se prefieren herramientas oficiales del sistema, como `paccache` y `journalctl`, cuando existen.**
 
-- Arch Linux
-- Pacman
-- systemd
+LinSweep no pretende decidir automáticamente qué debe eliminarse del sistema. Su objetivo es proporcionar información suficiente para que el usuario pueda tomar esa decisión.
 
-Algunos módulos serán opcionales y se habilitarán únicamente cuando la herramienta correspondiente esté instalada, por ejemplo:
-
-- Yay
-- Docker
-- libvirt
-
-En el futuro podría estudiarse soporte para otras distribuciones Linux.
+---
 
 ## Estado del proyecto
 
-LinSweep se encuentra en una etapa temprana de desarrollo.
+LinSweep está desarrollado inicialmente para **Arch Linux**.
 
-Actualmente los módulos se centran principalmente en **analizar y mostrar información**. Las operaciones de limpieza destructivas todavía no forman parte de la versión inicial.
+Actualmente incluye análisis de:
 
-Esto es intencional: primero se busca validar correctamente la detección y clasificación de archivos antes de permitir su eliminación.
+- caché de Pacman;
+- paquetes huérfanos;
+- systemd journal;
+- caché de Yay/AUR;
+- caché del usuario;
+- archivos grandes;
+- papelera;
+- archivos temporales.
+
+Y operaciones de limpieza para:
+
+- caché antigua de Pacman;
+- fuentes descargadas de Yay;
+- cachés de usuario clasificadas como `SAFE`;
+- papelera;
+- journals archivados;
+- archivos temporales antiguos.
+
+---
+
+## Roadmap
+
+Algunas ideas para versiones futuras:
+
+- mejorar la detección de archivos y directorios en uso;
+- añadir nuevos analizadores;
+- ampliar las clasificaciones de riesgo;
+- mejorar los reportes de espacio recuperable;
+- empaquetado para AUR;
+- soporte para más distribuciones Linux;
+- documentación adicional.
+
+---
 
 ## Licencia
 
-Este proyecto se distribuirá bajo la licencia **MIT**.
+LinSweep se distribuye bajo la licencia MIT.
+
+Copyright © 2026 Brayan Rios
