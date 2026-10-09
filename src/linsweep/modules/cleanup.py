@@ -1,6 +1,9 @@
 import os
 import shutil
 import subprocess
+import time
+from pathlib import Path
+
 from pathlib import Path
 
 from linsweep.models import (
@@ -12,6 +15,11 @@ from linsweep.models import (
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
+)
+from linsweep.modules.temp_files import (
+    TEMP_DIRECTORIES,
+    TempFile,
+    scan_temp_files,
 )
 from linsweep.modules.trash import (
     TrashEntry,
@@ -450,6 +458,22 @@ def get_user_cache_cleanup_candidates() -> tuple[list[CleanupCandidate], list[Cl
     in_use: list[CleanupCandidate] = []
     blocked: list[CleanupCandidate] = []
 
+    try:
+        cache_root = USER_CACHE.resolve(
+            strict=False
+        )
+    except OSError:
+        safe_entries = [
+            entry
+            for entry in entries
+            if entry.risk == RiskLevel.SAFE
+        ]
+        return (
+            candidates,
+            in_use,
+            safe_entries,
+        )
+
     for entry in entries:
         if entry.risk != RiskLevel.SAFE:
             continue
@@ -462,11 +486,6 @@ def get_user_cache_cleanup_candidates() -> tuple[list[CleanupCandidate], list[Cl
             parent = entry.path.parent.resolve(
                 strict=False
             )
-
-            cache_root = USER_CACHE.resolve(
-                strict=False
-            )
-
         except OSError:
             blocked.append(entry)
             continue
@@ -639,6 +658,7 @@ def execute_user_cache_cleanup(candidates: list[CleanupCandidate]) -> tuple[bool
         "Limpieza de caché del usuario completada.",
     )
 
+
 def execute_journal_cleanup(target_size: int) -> tuple[bool, str]:
     if target_size <= 0:
         return (
@@ -680,3 +700,350 @@ def execute_journal_cleanup(target_size: int) -> tuple[bool, str]:
         True,
         "Limpieza del journal completada.",
     )
+
+
+def get_temp_cleanup_candidates(min_age_days: float = 7.0) -> tuple[list[TempFile], list[TempFile], list[TempFile]]:
+    files = scan_temp_files()
+
+    process_paths = get_user_process_paths()
+    uid = os.getuid()
+
+    candidates: list[TempFile] = []
+    in_use: list[TempFile] = []
+    blocked: list[TempFile] = []
+
+    temp_roots: list[Path] = []
+
+    for root in TEMP_DIRECTORIES:
+        try:
+            temp_roots.append(
+                root.resolve(strict=False)
+            )
+        except OSError:
+            continue
+
+    for item in files:
+        if item.age_days < min_age_days:
+            continue
+
+        path = item.path
+
+        if path.is_symlink():
+            blocked.append(item)
+            continue
+       
+        if is_temp_coordination_file(path):
+            blocked.append(item)
+            continue
+
+        try:
+            stat = path.stat()
+        except OSError:
+            blocked.append(item)
+            continue
+
+        if stat.st_uid != uid:
+            blocked.append(item)
+            continue
+
+        if not path.is_file():
+            blocked.append(item)
+            continue
+
+        try:
+            resolved_path = path.resolve(
+                strict=False
+            )
+        except OSError:
+            blocked.append(item)
+            continue
+
+        inside_temp = any(
+            root in resolved_path.parents
+            for root in temp_roots
+        )
+
+        if not inside_temp:
+            blocked.append(item)
+            continue
+
+        if is_path_in_use(
+            path,
+            process_paths,
+        ):
+            in_use.append(item)
+            continue
+
+        candidates.append(item)
+
+    candidates.sort(
+        key=lambda item: item.size_bytes,
+        reverse=True,
+    )
+
+    in_use.sort(
+        key=lambda item: item.size_bytes,
+        reverse=True,
+    )
+
+    blocked.sort(
+        key=lambda item: item.size_bytes,
+        reverse=True,
+    )
+
+    return (
+        candidates,
+        in_use,
+        blocked,
+    )
+
+TEMP_COORDINATION_SUFFIXES = (
+    ".pid",
+    ".lock",
+    ".lck",
+    ".sock",
+    ".socket",
+    ".state",
+    ".addr",
+)
+
+TEMP_COORDINATION_ENDINGS = (
+    "_pid",
+    "-pid",
+    "_lock",
+    "-lock",
+    "_state",
+    "-state",
+    "_addr",
+    "-addr",
+)
+
+def execute_temp_cleanup(candidates: list[TempFile], min_age_days: float) -> tuple[bool, int, int, str]:
+    if min_age_days <= 0:
+        return (
+            False,
+            0,
+            0,
+            "La antigüedad mínima debe ser mayor que cero.",
+        )
+
+    uid = os.getuid()
+
+    temp_roots: list[Path] = []
+
+    for root in TEMP_DIRECTORIES:
+        try:
+            temp_roots.append(
+                root.resolve(strict=False)
+            )
+        except OSError:
+            continue
+
+    if not temp_roots:
+        return (
+            False,
+            0,
+            0,
+            "No fue posible validar los directorios temporales.",
+        )
+
+    validated: list[TempFile] = []
+
+    for item in candidates:
+        path = item.path
+
+        if not path.exists():
+            continue
+
+        if path.is_symlink():
+            return (
+                False,
+                0,
+                0,
+                f"Se rechazó un enlace simbólico: {path}",
+            )
+
+        if is_temp_coordination_file(path):
+            return (
+                False,
+                0,
+                0,
+                f"Se rechazó un archivo de coordinación: {path}",
+            )
+
+        try:
+            stat = path.stat()
+        except OSError as error:
+            return (
+                False,
+                0,
+                0,
+                f"No se pudo validar {path}: {error}",
+            )
+
+        if stat.st_uid != uid:
+            return (
+                False,
+                0,
+                0,
+                f"Se rechazó un archivo de otro usuario: {path}",
+            )
+
+        if not path.is_file():
+            return (
+                False,
+                0,
+                0,
+                f"Se rechazó un archivo no regular: {path}",
+            )
+
+        try:
+            resolved_path = path.resolve(strict=False)
+        except OSError:
+            return (
+                False,
+                0,
+                0,
+                f"No se pudo resolver la ruta: {path}",
+            )
+
+        inside_temp = any(
+            root in resolved_path.parents
+            for root in temp_roots
+        )
+
+        if not inside_temp:
+            return (
+                False,
+                0,
+                0,
+                f"Se rechazó una ruta fuera de los temporales: {path}",
+            )
+
+        age_seconds = time.time() - max(
+            stat.st_mtime,
+            stat.st_ctime,
+        )
+
+        age_days = age_seconds / 86400
+
+        if age_days < min_age_days:
+            return (
+                False,
+                0,
+                0,
+                f"El archivo ya no cumple la antigüedad mínima: {path}",
+            )
+
+        validated.append(item)
+
+    deleted_count = 0
+    deleted_size = 0
+
+    for item in validated:
+        path = item.path
+
+        if not path.exists():
+            continue
+
+        process_paths = get_user_process_paths()
+
+        if is_path_in_use(
+            path,
+            process_paths,
+        ):
+            return (
+                False,
+                deleted_count,
+                deleted_size,
+                f"El archivo pasó a estar en uso: {path}",
+            )
+
+        if path.is_symlink():
+            return (
+                False,
+                deleted_count,
+                deleted_size,
+                f"La ruta cambió a un enlace simbólico: {path}",
+            )
+
+        if is_temp_coordination_file(path):
+            return (
+                False,
+                deleted_count,
+                deleted_size,
+                f"La ruta pasó a ser un archivo de coordinación: {path}",
+            )
+
+        try:
+            stat = path.stat()
+
+            if stat.st_uid != uid:
+                return (
+                    False,
+                    deleted_count,
+                    deleted_size,
+                    f"El propietario del archivo cambió: {path}",
+                )
+
+            if not path.is_file():
+                return (
+                    False,
+                    deleted_count,
+                    deleted_size,
+                    f"El tipo del archivo cambió: {path}",
+                )
+
+            age_seconds = time.time() - max(
+                stat.st_mtime,
+                stat.st_ctime,
+            )
+
+            age_days = age_seconds / 86400
+
+            if age_days < min_age_days:
+                return (
+                    False,
+                    deleted_count,
+                    deleted_size,
+                    f"El archivo ya no cumple la antigüedad mínima: {path}",
+                )
+
+            size = stat.st_size
+
+            path.unlink()
+
+        except OSError as error:
+            return (
+                False,
+                deleted_count,
+                deleted_size,
+                f"No se pudo eliminar {path}: {error}",
+            )
+
+        deleted_count += 1
+        deleted_size += size
+
+    return (
+        True,
+        deleted_count,
+        deleted_size,
+        "Limpieza de archivos temporales completada.",
+    )
+
+def is_temp_coordination_file(path: Path) -> bool:
+    name = path.name.lower()
+
+    if name in {
+        "pid",
+        "lock",
+        "state",
+        "addr",
+    }:
+        return True
+
+    if name.endswith(TEMP_COORDINATION_SUFFIXES):
+        return True
+
+    return name.endswith(TEMP_COORDINATION_ENDINGS)
+

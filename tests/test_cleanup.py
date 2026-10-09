@@ -1,12 +1,21 @@
-from pathlib import Path
-
+import os
+import shutil
+import subprocess
+from types import SimpleNamespace
 import linsweep.modules.cleanup as cleanup
+
+from pathlib import Path
 from linsweep.models import (
     CachedPackage,
     CleanupCandidate,
     PackageStatus,
     RiskLevel,
     YayCacheEntry,
+)
+from linsweep.modules.temp_files import (
+    TEMP_DIRECTORIES,
+    TempFile,
+    scan_temp_files,
 )
 
 def make_package(name: str, status: PackageStatus, size: int = 1024) -> CachedPackage:
@@ -876,3 +885,335 @@ def test_execute_journal_cleanup_stops_on_error(monkeypatch) -> None:
 
     assert success is False
     assert "error" in message.lower()
+
+def test_temp_coordination_file_detection() -> None:
+    assert cleanup.is_temp_coordination_file(Path("/tmp/example.pid"))
+    assert cleanup.is_temp_coordination_file(Path("/tmp/example.lock"))
+    assert cleanup.is_temp_coordination_file(Path("/tmp/example_state"))
+    assert cleanup.is_temp_coordination_file(Path("/tmp/example-addr"))
+    assert cleanup.is_temp_coordination_file(Path("/tmp/.X1-lock"))
+    assert not cleanup.is_temp_coordination_file(Path("/tmp/example.txt"))
+    assert not cleanup.is_temp_coordination_file(Path("/tmp/weather_cache"))
+
+
+def test_temp_cleanup_blocks_coordination_files(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    normal_file = temp_root / "old-file.tmp"
+    coordination_file = temp_root / "session.pid"
+
+    normal_file.write_text("normal")
+    coordination_file.write_text("1234")
+
+    class FakeTempFile:
+        def __init__(self, path: Path, size_bytes: int, age_days: float) -> None:
+            self.path = path
+            self.size_bytes = size_bytes
+            self.age_days = age_days
+
+    entries = [
+        FakeTempFile(
+            path=normal_file,
+            size_bytes=normal_file.stat().st_size,
+            age_days=10.0,
+        ),
+        FakeTempFile(
+            path=coordination_file,
+            size_bytes=coordination_file.stat().st_size,
+            age_days=10.0,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "scan_temp_files",
+        lambda: entries,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    candidates, in_use, blocked = cleanup.get_temp_cleanup_candidates(
+        min_age_days=7.0
+    )
+
+    assert [item.path for item in candidates] == [
+        normal_file
+    ]
+
+    assert in_use == []
+
+    assert [item.path for item in blocked] == [
+        coordination_file
+    ]
+
+
+def test_temp_cleanup_ignores_files_younger_than_limit(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = temp_root / "recent.tmp"
+    file_path.write_text("recent")
+
+    class FakeTempFile:
+        def __init__(self, path: Path, size_bytes: int, age_days: float) -> None:
+            self.path = path
+            self.size_bytes = size_bytes
+            self.age_days = age_days
+
+    entries = [
+        FakeTempFile(
+            path=file_path,
+            size_bytes=file_path.stat().st_size,
+            age_days=2.0,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "scan_temp_files",
+        lambda: entries,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    candidates, in_use, blocked = cleanup.get_temp_cleanup_candidates(
+        min_age_days=7.0
+    )
+
+    assert candidates == []
+    assert in_use == []
+    assert blocked == []
+
+def test_execute_temp_cleanup_deletes_valid_file(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = temp_root / "old-file.tmp"
+    file_path.write_bytes(b"temporary data")
+
+    stat = file_path.stat()
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: set(),
+    )
+
+    monkeypatch.setattr(
+        cleanup.time,
+        "time",
+        lambda: stat.st_ctime + (10 * 86400),
+    )
+
+    candidate = SimpleNamespace(
+        path=file_path,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert deleted_size == len(b"temporary data")
+    assert not file_path.exists()
+    assert message == "Limpieza de archivos temporales completada."
+
+
+def test_execute_temp_cleanup_rejects_symlink(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    target = temp_root / "target.tmp"
+    target.write_text("data")
+
+    symlink = temp_root / "link.tmp"
+    symlink.symlink_to(target)
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    candidate = SimpleNamespace(
+        path=symlink,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert symlink.is_symlink()
+    assert target.exists()
+    assert "enlace simbólico" in message
+
+
+def test_execute_temp_cleanup_rejects_coordination_file(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = temp_root / "session.pid"
+    file_path.write_text("1234")
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    candidate = SimpleNamespace(
+        path=file_path,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert file_path.exists()
+    assert "archivo de coordinación" in message
+
+
+def test_execute_temp_cleanup_rejects_file_outside_temp(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = tmp_path / "outside.tmp"
+    file_path.write_text("data")
+
+    stat = file_path.stat()
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    monkeypatch.setattr(
+        cleanup.time,
+        "time",
+        lambda: stat.st_ctime + (10 * 86400),
+    )
+
+    candidate = SimpleNamespace(
+        path=file_path,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert file_path.exists()
+    assert "fuera de los temporales" in message
+
+
+def test_execute_temp_cleanup_rejects_recent_file(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = temp_root / "recent.tmp"
+    file_path.write_text("recent")
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    candidate = SimpleNamespace(
+        path=file_path,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert file_path.exists()
+    assert "antigüedad mínima" in message
+
+
+def test_execute_temp_cleanup_stops_if_file_is_in_use(tmp_path: Path, monkeypatch) -> None:
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+
+    file_path = temp_root / "old-file.tmp"
+    file_path.write_text("data")
+
+    stat = file_path.stat()
+
+    monkeypatch.setattr(
+        cleanup,
+        "TEMP_DIRECTORIES",
+        (temp_root,),
+    )
+
+    monkeypatch.setattr(
+        cleanup.time,
+        "time",
+        lambda: stat.st_ctime + (10 * 86400),
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "get_user_process_paths",
+        lambda: {file_path.resolve()},
+    )
+
+    candidate = SimpleNamespace(
+        path=file_path,
+    )
+
+    success, deleted_count, deleted_size, message = cleanup.execute_temp_cleanup(
+        [candidate],
+        min_age_days=7.0,
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert deleted_size == 0
+    assert file_path.exists()
+    assert "pasó a estar en uso" in message

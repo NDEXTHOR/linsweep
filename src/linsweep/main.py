@@ -1,12 +1,12 @@
 import argparse
 import shutil
+from pathlib import Path
 
 from linsweep.models import PackageStatus, RiskLevel
 from linsweep.modules.yay import scan_yay_cache
 from linsweep.modules.user_cache import scan_user_cache
 from linsweep.modules.large_files import scan_large_files
 from linsweep.modules.temp_files import scan_temp_files
-from pathlib import Path
 
 from linsweep.modules.pacman import (
     classify_packages,
@@ -16,7 +16,6 @@ from linsweep.modules.pacman import (
 from linsweep.modules.journal import (
     calculate_recoverable,
     get_journal_disk_usage,
-    parse_size,
 )
 from linsweep.modules.trash import (
     get_trash_directory,
@@ -28,10 +27,12 @@ from linsweep.modules.cleanup import (
     execute_yay_cleanup,
     execute_user_cache_cleanup,
     execute_journal_cleanup,
+    execute_temp_cleanup,
     get_pacman_cleanup_candidates,
     get_trash_cleanup_candidates,
     get_yay_cleanup_candidates,
     get_user_cache_cleanup_candidates,
+    get_temp_cleanup_candidates,
 )
 
 def format_size(size: int) -> str:
@@ -99,6 +100,21 @@ def parse_journal_size(value: str) -> int:
         )
 
     return size
+
+def parse_positive_days(value: str) -> float:
+    try:
+        days = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"Número de días inválido: {value}"
+        )
+
+    if days <= 0:
+        raise argparse.ArgumentTypeError(
+            "El número de días debe ser mayor que cero."
+        )
+
+    return days
 
 def show_disk_usage() -> None:
     total, used, free = shutil.disk_usage("/")
@@ -624,11 +640,11 @@ def show_user_cache(details: bool = False) -> None:
         )
         print()
 
-def show_large_files(root: Path,min_size: int,) -> None:
+def show_large_files(root: Path, min_size: int) -> None:
     print("=== ARCHIVOS GRANDES ===")
 
     files = scan_large_files(
-	root=root,
+    root=root,
         min_size=min_size,
     )
 
@@ -675,7 +691,7 @@ def show_large_files(root: Path,min_size: int,) -> None:
 
     print()
 
-def show_orphan_packages(details: bool = False,) -> None:
+def show_orphan_packages(details: bool = False) -> None:
     print("=== PAQUETES HUÉRFANOS ===")
 
     orphans = get_orphan_packages()
@@ -719,7 +735,7 @@ def show_orphan_packages(details: bool = False,) -> None:
 
         print()
 
-def show_trash(details: bool = False,) -> None:
+def show_trash(details: bool = False) -> None:
     print("=== PAPELERA ===")
 
     entries = scan_trash()
@@ -794,7 +810,7 @@ def show_trash(details: bool = False,) -> None:
 
             print()
 
-def show_temp_files(details: bool = False,) -> None:
+def show_temp_files(details: bool = False) -> None:
     print("=== ARCHIVOS TEMPORALES ===")
 
     files = scan_temp_files()
@@ -973,7 +989,7 @@ def show_package_details(packages) -> None:
 
     print()
 
-def clean_pacman_cache(dry_run: bool = False,) -> None:
+def clean_pacman_cache(dry_run: bool = False) -> None:
     print("=== LIMPIEZA DE CACHÉ PACMAN ===")
     print()
 
@@ -1099,7 +1115,7 @@ def clean_pacman_cache(dry_run: bool = False,) -> None:
 
     print()
 
-def clean_trash(dry_run: bool = False,) -> None:
+def clean_trash(dry_run: bool = False) -> None:
     print("=== LIMPIEZA DE PAPELERA ===")
     print()
 
@@ -1634,6 +1650,154 @@ def clean_journal(target_size: int, dry_run: bool = False) -> None:
 
     print()
 
+def clean_temp(older_than_days: float = 7.0, dry_run: bool = False) -> None:
+    print("=== LIMPIEZA DE ARCHIVOS TEMPORALES ===")
+    print()
+
+    candidates, in_use, blocked = get_temp_cleanup_candidates(
+        min_age_days=older_than_days
+    )
+
+    print(
+        f"Antigüedad mínima:          "
+        f"{older_than_days:g} días"
+    )
+
+    print(
+        "Clasificación:              REVIEW"
+    )
+
+    print()
+
+    if in_use:
+        print("Omitidos porque están en uso:")
+        print()
+
+        for item in in_use:
+            print(
+                f"{format_size(item.size_bytes):>10}  "
+                f"{item.age_days:7.1f} días  "
+                f"{item.path}"
+            )
+
+        print()
+
+    if blocked:
+        print("Omitidos por seguridad:")
+        print()
+
+        for item in blocked:
+            print(
+                f"{format_size(item.size_bytes):>10}  "
+                f"{item.age_days:7.1f} días  "
+                f"{item.path}"
+            )
+
+        print()
+
+    if not candidates:
+        print(
+            "No se encontraron archivos temporales "
+            "elegibles con ese criterio."
+        )
+        print()
+        return
+
+    total_size = sum(
+        item.size_bytes
+        for item in candidates
+    )
+
+    file_word = (
+        "archivo"
+        if len(candidates) == 1
+        else "archivos"
+    )
+
+    print(
+        f"Candidatos:                 "
+        f"{len(candidates)} {file_word}"
+    )
+
+    print(
+        f"Espacio recuperable:        "
+        f"{format_size(total_size)}"
+    )
+
+    print()
+    print("Archivos que se eliminarían:")
+    print()
+
+    for item in candidates:
+        print(
+            f"{format_size(item.size_bytes):>10}  "
+            f"{item.age_days:7.1f} días  "
+            f"{item.path}"
+        )
+
+    print()
+
+    if dry_run:
+        print("DRY-RUN: no se realizó ningún cambio.")
+        print()
+        return
+
+        print(
+        "ADVERTENCIA: estos archivos temporales "
+        "están clasificados como REVIEW."
+    )
+
+    print(
+        "LinSweep volverá a validar cada archivo "
+        "antes de eliminarlo."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "ELIMINAR" para continuar: '
+        )
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "ELIMINAR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, deleted_count, deleted_size, message = execute_temp_cleanup(
+        candidates,
+        older_than_days,
+    )
+
+    print(message)
+
+    print(
+        f"Archivos eliminados:        "
+        f"{deleted_count}"
+    )
+
+    print(
+        f"Espacio recuperado:         "
+        f"{format_size(deleted_size)}"
+    )
+
+    if not success:
+        print()
+        print(
+            "La limpieza fue detenida porque las "
+            "condiciones cambiaron durante la ejecución."
+        )
+
+    print()
+
+    print()
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
@@ -1668,15 +1832,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     large_files_parser = subparsers.add_parser(
         "large-files",
-    	help="Busca archivos grandes en el directorio del usuario.",
+        help="Busca archivos grandes en el directorio del usuario.",
     )
 
     large_files_parser.add_argument(
         "--min-size",
-    	type=parse_size,
-    	default=500 * 1024 * 1024,
-    	metavar="TAMAÑO",
-    	help=(
+        type=parse_size,
+        default=500 * 1024 * 1024,
+        metavar="TAMAÑO",
+        help=(
             "Tamaño mínimo del archivo. "
             "Ejemplos: 100M, 500M, 1G. "
             "Predeterminado: 500M."
@@ -1685,24 +1849,24 @@ def build_parser() -> argparse.ArgumentParser:
 
     large_files_parser.add_argument(
         "--path",
-    	type=Path,
-    	default=Path.home(),
-    	metavar="RUTA",
-    	help=(
+        type=Path,
+        default=Path.home(),
+        metavar="RUTA",
+        help=(
             "Directorio que se analizará. "
-        	"Predeterminado: directorio personal."
-    	),
+            "Predeterminado: directorio personal."
+        ),
     )
 
     trash_parser = subparsers.add_parser(
         "trash",
-    	help="Analiza la papelera del usuario.",
+        help="Analiza la papelera del usuario.",
     )
 
     trash_parser.add_argument(
         "--details",
-    	action="store_true",
-    	help="Muestra los elementos de la papelera.",
+        action="store_true",
+        help="Muestra los elementos de la papelera.",
     )
 
     temp_parser = subparsers.add_parser(
@@ -1718,12 +1882,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     yay_parser = subparsers.add_parser(
         "yay",
-    	help="Analiza la caché de Yay/AUR.",
+        help="Analiza la caché de Yay/AUR.",
     )
 
     yay_parser.add_argument(
         "--details",
-    	action="store_true",
+        action="store_true",
         help="Muestra el tamaño de cada directorio de Yay.",
     )
 
@@ -1734,8 +1898,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     cache_parser.add_argument(
         "--details",
-    	action="store_true",
-    	help="Muestra todos los directorios de caché.",
+        action="store_true",
+        help="Muestra todos los directorios de caché.",
     )
 
     clean_parser = subparsers.add_parser(
@@ -1834,6 +1998,31 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    clean_temp_parser = clean_subparsers.add_parser(
+        "temp",
+        help="Analiza archivos temporales antiguos para limpieza.",
+    )
+
+    clean_temp_parser.add_argument(
+        "--older-than",
+        type=parse_positive_days,
+        default=7.0,
+        metavar="DAYS",
+        help=(
+            "Considera archivos con al menos esta "
+            "antigüedad. Por defecto: 7 días."
+        ),
+    )
+
+    clean_temp_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra exactamente qué archivos se eliminarían "
+            "sin modificar nada."
+        ),
+    )
+
     return parser
 
 def main() -> None:
@@ -1876,7 +2065,7 @@ def main() -> None:
     
     if args.command == "trash":
         show_trash(
-        details=args.details
+            details=args.details
         )
         return
     
@@ -1909,11 +2098,18 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
             return
+        
+        if args.clean_target == "temp":
+            clean_temp(
+                older_than_days=args.older_than,
+                dry_run=args.dry_run,
+            )
+            return
 
     show_disk_usage()
     show_pacman_cache()
     show_journal()
-    show_yay_cache()    
+    show_yay_cache()
 
 if __name__ == "__main__":
     main()
