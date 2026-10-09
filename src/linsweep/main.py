@@ -24,8 +24,10 @@ from linsweep.modules.trash import (
 from linsweep.modules.cleanup import (
     execute_pacman_cleanup,
     execute_trash_cleanup,
+    execute_yay_cleanup,
     get_pacman_cleanup_candidates,
     get_trash_cleanup_candidates,
+    get_yay_cleanup_candidates,
 )
 
 def format_size(size: int) -> str:
@@ -1210,6 +1212,124 @@ def clean_trash(dry_run: bool = False,) -> None:
 
     print()
 
+def clean_yay(dry_run: bool = False) -> None:
+    print("=== LIMPIEZA DE CACHÉ YAY ===")
+    print()
+
+    candidates = get_yay_cleanup_candidates()
+
+    if not candidates:
+        print("No se encontraron fuentes descargadas para limpiar.")
+        print()
+        return
+
+    total_size = sum(
+        candidate.size_bytes
+        for candidate in candidates
+    )
+
+    file_word = (
+        "archivo"
+        if len(candidates) == 1
+        else "archivos"
+    )
+
+    print(
+        f"Fuentes descargadas:        "
+        f"{len(candidates)} {file_word}"
+    )
+
+    print(
+        f"Espacio recuperable:        "
+        f"{format_size(total_size)}"
+    )
+
+    print(
+        "Clasificación:              SAFE"
+    )
+
+    print()
+    print("Archivos que se eliminarían:")
+    print()
+
+    for candidate in candidates:
+        print(
+            f"{format_size(candidate.size_bytes):>10}  "
+            f"{candidate.path}"
+        )
+
+    print()
+
+    if dry_run:
+        print("DRY-RUN: no se realizó ningún cambio.")
+        print()
+        return
+
+    print(
+        "LinSweep eliminará únicamente las fuentes "
+        "descargadas mostradas arriba."
+    )
+
+    print(
+        "No se eliminarán paquetes compilados, "
+        "repositorios Git ni metadatos AUR."
+    )
+
+    print()
+
+    try:
+        confirmation = input(
+            'Escribe "ELIMINAR" para continuar: '
+        )
+    except (KeyboardInterrupt, EOFError):
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    if confirmation != "ELIMINAR":
+        print()
+        print("Limpieza cancelada.")
+        return
+
+    print()
+
+    success, deleted_count, message = execute_yay_cleanup(
+        candidates
+    )
+
+    print(message)
+
+    print(
+        f"Archivos eliminados:        "
+        f"{deleted_count}"
+    )
+
+    remaining = get_yay_cleanup_candidates()
+
+    remaining_size = sum(
+        candidate.size_bytes
+        for candidate in remaining
+    )
+
+    recovered = max(
+        0,
+        total_size - remaining_size,
+    )
+
+    print(
+        f"Espacio recuperado estimado: "
+        f"{format_size(recovered)}"
+    )
+
+    if not success:
+        print(
+            "La limpieza no terminó completamente. "
+            "Ejecuta 'linsweep yay --details' "
+            "para revisar el estado actual."
+        )
+
+    print()
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="linsweep",
@@ -1358,6 +1478,20 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    clean_yay_parser = clean_subparsers.add_parser(
+        "yay",
+        help="Limpia fuentes descargadas de la caché de Yay.",
+    )
+
+    clean_yay_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Muestra exactamente qué se eliminaría "
+            "sin modificar la caché de Yay."
+        ),
+    )
+
     return parser
 
 
@@ -1413,15 +1547,15 @@ def main() -> None:
 
     if args.command == "clean":
         if args.clean_target == "packages":
-            clean_pacman_cache(
-                dry_run=args.dry_run
-            )
+            clean_pacman_cache(dry_run=args.dry_run)
             return
-        
-    if args.clean_target == "trash":
-            clean_trash(
-                dry_run=args.dry_run
-            )
+
+        if args.clean_target == "trash":
+            clean_trash(dry_run=args.dry_run)
+            return
+
+        if args.clean_target == "yay":
+            clean_yay(dry_run=args.dry_run)
             return
 
     show_disk_usage()

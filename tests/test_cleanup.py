@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import linsweep.modules.cleanup as cleanup
-from linsweep.models import CachedPackage, PackageStatus
+from linsweep.models import CachedPackage, PackageStatus, YayCacheEntry
 
 
 def make_package(name: str, status: PackageStatus, size: int = 1024) -> CachedPackage:
@@ -359,3 +359,150 @@ def test_execute_trash_cleanup_rejects_path_outside_trash(tmp_path: Path, monkey
     assert deleted_count == 0
     assert outside_file.exists()
     assert "fuera" in message.lower()
+
+def test_get_yay_cleanup_candidates_returns_downloaded_sources(tmp_path: Path, monkeypatch) -> None:
+    source_file = tmp_path / "source.tar.gz"
+    source_file.write_bytes(b"x" * 2048)
+
+    entry = YayCacheEntry(
+        name="example",
+        path=tmp_path,
+        total_size=2048,
+        downloaded_sources_size=2048,
+        downloaded_source_paths=[
+            source_file,
+        ],
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "scan_yay_cache",
+        lambda: [entry],
+    )
+
+    candidates = cleanup.get_yay_cleanup_candidates()
+
+    assert len(candidates) == 1
+    assert candidates[0].path == source_file
+    assert candidates[0].size_bytes == 2048
+    assert candidates[0].risk == cleanup.RiskLevel.SAFE
+
+
+def test_execute_yay_cleanup_removes_downloaded_source(tmp_path: Path, monkeypatch) -> None:
+    yay_cache = tmp_path / "yay"
+    package_directory = yay_cache / "example"
+
+    package_directory.mkdir(
+        parents=True
+    )
+
+    source_file = package_directory / "source.tar.gz"
+
+    source_file.write_text(
+        "LinSweep",
+        encoding="utf-8",
+    )
+
+    candidate = cleanup.CleanupCandidate(
+        name=source_file.name,
+        path=source_file,
+        size_bytes=source_file.stat().st_size,
+        description="Fuente descargada por Yay.",
+        risk=cleanup.RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "YAY_CACHE",
+        yay_cache,
+    )
+
+    success, deleted_count, message = cleanup.execute_yay_cleanup(
+        [candidate]
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert not source_file.exists()
+    assert "completada" in message.lower()
+
+
+def test_execute_yay_cleanup_rejects_path_outside_cache(tmp_path: Path, monkeypatch) -> None:
+    yay_cache = tmp_path / "yay"
+
+    yay_cache.mkdir()
+
+    outside_file = tmp_path / "important.txt"
+
+    outside_file.write_text(
+        "No borrar",
+        encoding="utf-8",
+    )
+
+    candidate = cleanup.CleanupCandidate(
+        name=outside_file.name,
+        path=outside_file,
+        size_bytes=outside_file.stat().st_size,
+        description="Prueba",
+        risk=cleanup.RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "YAY_CACHE",
+        yay_cache,
+    )
+
+    success, deleted_count, message = cleanup.execute_yay_cleanup(
+        [candidate]
+    )
+
+    assert success is False
+    assert deleted_count == 0
+    assert outside_file.exists()
+    assert "fuera" in message.lower()
+
+
+def test_execute_yay_cleanup_unlinks_symlink_without_deleting_target(tmp_path: Path, monkeypatch) -> None:
+    yay_cache = tmp_path / "yay"
+    package_directory = yay_cache / "example"
+
+    package_directory.mkdir(
+        parents=True
+    )
+
+    target_file = tmp_path / "important.txt"
+
+    target_file.write_text(
+        "No borrar",
+        encoding="utf-8",
+    )
+
+    symlink = package_directory / "source.tar.gz"
+
+    symlink.symlink_to(
+        target_file
+    )
+
+    candidate = cleanup.CleanupCandidate(
+        name=symlink.name,
+        path=symlink,
+        size_bytes=0,
+        description="Prueba",
+        risk=cleanup.RiskLevel.SAFE,
+    )
+
+    monkeypatch.setattr(
+        cleanup,
+        "YAY_CACHE",
+        yay_cache,
+    )
+
+    success, deleted_count, _ = cleanup.execute_yay_cleanup(
+        [candidate]
+    )
+
+    assert success is True
+    assert deleted_count == 1
+    assert not symlink.exists()
+    assert target_file.exists()

@@ -1,7 +1,14 @@
 import shutil
 import subprocess
 
-from linsweep.models import CachedPackage, PackageStatus
+from linsweep.modules.yay import YAY_CACHE, scan_yay_cache
+
+from linsweep.models import (
+    CachedPackage,
+    CleanupCandidate,
+    PackageStatus,
+    RiskLevel,
+)
 from linsweep.modules.pacman import (
     classify_packages,
     scan_pacman_cache,
@@ -196,4 +203,93 @@ def execute_trash_cleanup(
         True,
         deleted_count,
         "Papelera vaciada correctamente.",
+    )
+
+def get_yay_cleanup_candidates() -> list[CleanupCandidate]:
+    entries = scan_yay_cache()
+
+    candidates: list[CleanupCandidate] = []
+
+    for entry in entries:
+        for path in entry.downloaded_source_paths:
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+
+            candidates.append(
+                CleanupCandidate(
+                    name=path.name,
+                    path=path,
+                    size_bytes=size,
+                    description="Fuente descargada por Yay.",
+                    risk=RiskLevel.SAFE,
+                )
+            )
+
+    candidates.sort(
+        key=lambda candidate: candidate.size_bytes,
+        reverse=True,
+    )
+
+    return candidates
+
+
+def execute_yay_cleanup(candidates: list[CleanupCandidate]) -> tuple[bool, int, str]:
+    try:
+        yay_root = YAY_CACHE.resolve(strict=False)
+    except OSError:
+        return (
+            False,
+            0,
+            "No se pudo validar la caché de Yay.",
+        )
+
+    deleted_count = 0
+
+    for candidate in candidates:
+        path = candidate.path
+
+        try:
+            parent = path.parent.resolve(strict=False)
+        except OSError:
+            return (
+                False,
+                deleted_count,
+                f"No se pudo validar la ruta: {path}",
+            )
+
+        if not parent.is_relative_to(yay_root):
+            return (
+                False,
+                deleted_count,
+                f"Se rechazó una ruta fuera de la caché de Yay: {path}",
+            )
+
+        try:
+            if path.is_dir() and not path.is_symlink():
+                return (
+                    False,
+                    deleted_count,
+                    f"Se rechazó un directorio: {path}",
+                )
+
+            if not path.exists() and not path.is_symlink():
+                continue
+
+            path.unlink()
+
+        except OSError as error:
+            return (
+                False,
+                deleted_count,
+                f"No se pudo eliminar {path}: {error}",
+            )
+
+        deleted_count += 1
+
+    return (
+        True,
+        deleted_count,
+        "Limpieza de fuentes descargadas de Yay completada.",
     )

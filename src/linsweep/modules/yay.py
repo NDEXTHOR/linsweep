@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from linsweep.models import YayCacheEntry
+from linsweep.models import PackageStatus, YayCacheEntry
 from linsweep.modules.pacman import (
     compare_versions,
     get_installed_packages,
@@ -11,42 +11,46 @@ from linsweep.modules.pacman import (
 YAY_CACHE = Path.home() / ".cache" / "yay"
 
 
-SOURCE_EXTENSIONS = (
-    ".deb",
-    ".rpm",
-    ".zip",
-    ".7z",
+DOWNLOADED_SOURCE_EXTENSIONS = (
+    ".tar",
     ".tar.gz",
-    ".tar.xz",
     ".tar.bz2",
+    ".tar.xz",
     ".tar.zst",
     ".tgz",
+    ".tbz",
+    ".tbz2",
     ".txz",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".deb",
+    ".rpm",
+    ".AppImage",
 )
 
 
 METADATA_FILES = {
     "PKGBUILD",
     ".SRCINFO",
-    ".gitignore",
-    ".nvchecker.toml",
 }
 
 
-def get_file_size(path: Path) -> int:
+def get_path_size(path: Path) -> int:
     try:
-        return path.stat().st_size
+        if path.is_file():
+            return path.stat().st_size
     except OSError:
         return 0
 
-
-def get_directory_size(path: Path) -> int:
     total = 0
 
-    if not path.exists():
+    try:
+        items = path.rglob("*")
+    except OSError:
         return 0
 
-    for item in path.rglob("*"):
+    for item in items:
         try:
             if item.is_file():
                 total += item.stat().st_size
@@ -56,31 +60,36 @@ def get_directory_size(path: Path) -> int:
     return total
 
 
-def is_compiled_package(path: Path) -> bool:
-    return (
-        path.is_file()
-        and ".pkg.tar." in path.name
-        and not path.name.endswith(".sig")
-    )
-
-
 def is_downloaded_source(path: Path) -> bool:
-    name = path.name.lower()
+    if not path.is_file():
+        return False
+
+    name = path.name
 
     return any(
         name.endswith(extension)
-        for extension in SOURCE_EXTENSIONS
+        for extension in DOWNLOADED_SOURCE_EXTENSIONS
     )
 
 
-def is_metadata_file(path: Path) -> bool:
-    if path.name in METADATA_FILES:
-        return True
+def classify_compiled_package(package_name: str, package_version: str, installed: dict[str, str]) -> PackageStatus:
+    installed_version = installed.get(package_name)
 
-    if path.name.endswith(".install"):
-        return True
+    if installed_version is None:
+        return PackageStatus.NOT_INSTALLED
 
-    return False
+    comparison = compare_versions(
+        package_version,
+        installed_version,
+    )
+
+    if comparison == 0:
+        return PackageStatus.INSTALLED
+
+    if comparison < 0:
+        return PackageStatus.OLD
+
+    return PackageStatus.NEWER
 
 
 def scan_yay_cache() -> list[YayCacheEntry]:
@@ -91,118 +100,128 @@ def scan_yay_cache() -> list[YayCacheEntry]:
 
     installed = get_installed_packages()
 
-    for package_dir in YAY_CACHE.iterdir():
+    try:
+        package_directories = list(
+            YAY_CACHE.iterdir()
+        )
+    except (PermissionError, OSError):
+        return entries
 
-        if not package_dir.is_dir():
+    for package_directory in package_directories:
+        if not package_directory.is_dir():
             continue
 
-        total_size = get_directory_size(package_dir)
+        total_size = get_path_size(
+            package_directory
+        )
 
         compiled_current_size = 0
         compiled_old_size = 0
         compiled_newer_size = 0
         compiled_not_installed_size = 0
 
+        downloaded_sources_size = 0
+        git_size = 0
+        metadata_size = 0
+        other_size = 0
+
         compiled_current_count = 0
         compiled_old_count = 0
         compiled_newer_count = 0
         compiled_not_installed_count = 0
 
-        downloaded_sources_size = 0
-        metadata_size = 0
+        downloaded_source_paths: list[Path] = []
 
-        git_dir = package_dir / ".git"
-        git_size = get_directory_size(git_dir)
+        try:
+            items = list(
+                package_directory.iterdir()
+            )
+        except (PermissionError, OSError):
+            continue
 
-        for item in package_dir.iterdir():
-
-            if item.name == ".git":
+        for item in items:
+            try:
+                size = get_path_size(item)
+            except OSError:
                 continue
 
-            if not item.is_file():
+            # Repositorio Git usado por Yay para el paquete AUR.
+            if item.name == ".git" and item.is_dir():
+                git_size += size
                 continue
 
-            size = get_file_size(item)
-
-            if is_compiled_package(item):
-
-                package = parse_package_filename(item)
-
-                if package is None:
-                    continue
-
-                installed_version = installed.get(
-                    package.name
-                )
-
-                if installed_version is None:
-                    compiled_not_installed_size += size
-                    compiled_not_installed_count += 1
-                    continue
-
-                comparison = compare_versions(
-                    package.version,
-                    installed_version,
-                )
-
-                if comparison == 0:
-                    compiled_current_size += size
-                    compiled_current_count += 1
-
-                elif comparison < 0:
-                    compiled_old_size += size
-                    compiled_old_count += 1
-
-                else:
-                    compiled_newer_size += size
-                    compiled_newer_count += 1
-
-                continue
-
-            if is_downloaded_source(item):
-                downloaded_sources_size += size
-                continue
-
-            if is_metadata_file(item):
+            # Archivos de metadatos del paquete AUR.
+            if item.name in METADATA_FILES:
                 metadata_size += size
                 continue
 
-        known_size = (
-            compiled_current_size
-            + compiled_old_size
-            + compiled_newer_size
-            + compiled_not_installed_size
-            + downloaded_sources_size
-            + git_size
-            + metadata_size
-        )
+            # Paquetes compilados (*.pkg.tar.*).
+            if item.is_file():
+                package = parse_package_filename(
+                    item
+                )
 
-        other_size = max(
-            0,
-            total_size - known_size,
-        )
+                if package is not None:
+                    status = classify_compiled_package(
+                        package.name,
+                        package.version,
+                        installed,
+                    )
+
+                    if status == PackageStatus.INSTALLED:
+                        compiled_current_size += size
+                        compiled_current_count += 1
+
+                    elif status == PackageStatus.OLD:
+                        compiled_old_size += size
+                        compiled_old_count += 1
+
+                    elif status == PackageStatus.NEWER:
+                        compiled_newer_size += size
+                        compiled_newer_count += 1
+
+                    elif status == PackageStatus.NOT_INSTALLED:
+                        compiled_not_installed_size += size
+                        compiled_not_installed_count += 1
+
+                    continue
+
+            # Fuentes descargadas por Yay.
+            if is_downloaded_source(item):
+                downloaded_sources_size += size
+                downloaded_source_paths.append(
+                    item
+                )
+                continue
+
+            # Cualquier otro archivo o directorio que
+            # LinSweep todavía no clasifica.
+            other_size += size
 
         entries.append(
             YayCacheEntry(
-                name=package_dir.name,
-                path=package_dir,
+                name=package_directory.name,
+                path=package_directory,
                 total_size=total_size,
-
                 compiled_current_size=compiled_current_size,
                 compiled_old_size=compiled_old_size,
                 compiled_newer_size=compiled_newer_size,
                 compiled_not_installed_size=compiled_not_installed_size,
-
                 downloaded_sources_size=downloaded_sources_size,
                 git_size=git_size,
                 metadata_size=metadata_size,
                 other_size=other_size,
-
                 compiled_current_count=compiled_current_count,
                 compiled_old_count=compiled_old_count,
                 compiled_newer_count=compiled_newer_count,
                 compiled_not_installed_count=compiled_not_installed_count,
+                downloaded_source_paths=downloaded_source_paths,
             )
         )
+
+    entries.sort(
+        key=lambda entry: entry.total_size,
+        reverse=True,
+    )
 
     return entries

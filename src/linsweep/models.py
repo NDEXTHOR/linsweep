@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -65,6 +65,8 @@ class YayCacheEntry:
     compiled_old_count: int = 0
     compiled_newer_count: int = 0
     compiled_not_installed_count: int = 0
+
+    downloaded_source_paths: list[Path] = field(default_factory=list)
 
 @dataclass
 class OrphanPackage:
